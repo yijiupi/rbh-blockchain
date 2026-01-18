@@ -1,5 +1,10 @@
 package main
 
+import (
+	"fmt"
+	"log"
+)
+
 // 查询余额
 func (cli *CLI) getbalance(address, nodeID string) {
 
@@ -35,7 +40,16 @@ func (cli *CLI) send(from, to string, amount int, nodeID string, mineNow bool) {
 
 }
 
-// 挖矿
+// 启动节点（节点，矿工地址）
 func (cli *CLI) startNode(nodeID, minerAddress string) {
-
+	fmt.Printf("Starting node %s\n", nodeID)
+	if len(minerAddress) > 0 {
+		if ValidateAddress(minerAddress) {
+			fmt.Println("Mining is on. Address to receive rewards: ", minerAddress)
+		} else {
+			log.Panic("Wrong miner address!")
+		}
+	}
+	// minerAddress为空普通节，否则为挖矿节点
+	StartServer(nodeID, minerAddress)
 }
