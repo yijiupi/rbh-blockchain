@@ -85,46 +85,59 @@ func bytesToCommand(bytes []byte) string {
 }
 
 /*
-	1、设置节点地址
-	2、初始化区块链数据库
-	3、创建监听器
+	1、当前节点地址
+	2、创建监听器
+	3、判定当前节点是否为种子节点，若不是种子节点，创建当前节点数据库，并在已知列表中连接种子节点
 	4、Accept启动监听，等待其它节点连接
 	5、其它节点来了，连接已知节点同步区块链状态
 	5、成为网络的种子节点，等待其他节点加入
 */
 // 开启服务器（节点连接服务器）
 func StartServer(nodeID, minerAddress string) {
-	nodeAddress = fmt.Sprintf("localhost:%s", nodeID) // 设置节点地址localshot:3000
+	nodeAddress = fmt.Sprintf("localhost:%s", nodeID) // 服务器节点localshot:3000
 	miningAddress = minerAddress                      // 奖励矿工地址
-
-	bc := GetBlockchain(nodeID) // 初始化区块链数据库
-
-	ln, err := net.Listen(protocol, nodeAddress) // 监听传入连接localshot:3000
+	ln, err := net.Listen(protocol, nodeAddress)      // 服务端监听传入连接localshot:3000
 	if err != nil {
 		log.Panic(err)
 	}
-	defer ln.Close() // 执行完毕记得关闭监听
-
+	defer ln.Close()                  // 执行完毕记得关闭监听
+	bc := GetBlockchain(nodeID)       // 创建当前节点的数据库，得到当前区块hash和db
 	if nodeAddress != knownNodes[0] { // 检查自己是不是那个种子节点
-		sendVersion(knownNodes[0], bc) // 连接已知节点同步区块链状态
+		sendVersion(knownNodes[0], bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
 	}
 
-	// 成为网络的种子节点，等待其他节点加入
+	// 服务端等待其它节点来连接
 	for {
-		conn, err := ln.Accept() // 等待其它节点来连接
+		conn, err := ln.Accept()
 		if err != nil {
 			log.Panic(err)
 		}
-		go handleConnection(conn, bc)
+		go handleConnection(conn, bc) // 监测到其它节点连接，处理连接同步数据到db
 	}
 }
 
-// 新区块链连接已知节点（已知地址，新区块链）同步区块链状态
-func sendVersion(addr string, bc *BlockChain) {
-	bestHeight := bc.GetBestHeight()                                    // 新区块链的高度
-	payload := gobEncode(verzion{nodeVersion, bestHeight, nodeAddress}) // 新编码（新版本，新区块，新节点地址 ）
-	request := append(commandToBytes("version"), payload...)            // 带版本的新编码
-	sendData(addr, request)                                             // 加入到连接（已知地址，带版本的新编码）
+// 发送数据，连接种子节点（已知地址，带版本的新编码）
+func sendData(addr string, data []byte) {
+	conn, err := net.Dial(protocol, addr) // 客户端连接已知列表中的种子节点
+	if err != nil {
+		fmt.Printf("%s is not available\n", addr)
+		var updatedNodes []string
+		// 若报错说明addr是个失败节点，需要删除
+		for _, node := range knownNodes {
+			if node != addr {
+				updatedNodes = append(updatedNodes, node) // 排除掉失败节点的新数组
+			}
+		}
+		knownNodes = updatedNodes // 排除掉失败节点的新数组，赋值给已知节点列表
+		return
+	}
+	defer conn.Close()
+	// data 是要发送的字节切片（比如序列化的结构体、文件内容等）
+	// conn 是网络连接（实现了 io.Writer 接口）
+	_, err = io.Copy(conn, bytes.NewReader(data)) // 它将内存中的数据通过 TCP 连接发送出去，让服务端接收到
+	if err != nil {
+		log.Panic(err)
+	}
 }
 
 // 区块链 P2P 网络的消息处理器
@@ -151,36 +164,10 @@ func handleConnection(conn net.Conn, bc *BlockChain) {
 	case "tx":
 		handleTx(request, bc)
 	case "version":
-		handleVersion(request, bc)
+		handleVersion(request, bc) // 版本处理，用于比较区块高度最长合法链
 	default:
 		fmt.Println("Unknown command!")
 	}
 
 	conn.Close()
-}
-
-// 发送数据，加入到连接（已知地址，带版本的新编码）
-func sendData(addr string, data []byte) {
-	conn, err := net.Dial(protocol, addr) // 创建已知地址的网络连接
-	if err != nil {
-		fmt.Printf("%s is not available\n", addr)
-		var updatedNodes []string
-		// 若报错无法连接，检查已知节点
-		for _, node := range knownNodes {
-			if node != addr {
-				// 很可能其它人提前挖到矿了，我们要更新节点
-				updatedNodes = append(updatedNodes, node)
-			}
-		}
-		// 很可能其它人提前挖到矿了，我们要更新节点，新节点赋值给老节点
-		knownNodes = updatedNodes
-
-		return
-	}
-	defer conn.Close()
-	// 加入连接，让监听器接收到
-	_, err = io.Copy(conn, bytes.NewReader(data))
-	if err != nil {
-		log.Panic(err)
-	}
 }
