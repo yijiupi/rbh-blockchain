@@ -17,7 +17,11 @@ func (cli *CLI) createblockchaincmd(address, nodeID string) {
 
 // 创建钱包
 func (cli *CLI) createWallet(nodeID string) {
+	wallets, _ := NewWallets(nodeID)  // 创建/获取，钱包集合
+	address := wallets.CreateWallet() // 创建新钱包
+	wallets.SaveToFile(nodeID)        // 钱包保存到文件
 
+	fmt.Printf("Your new address: %s\n", address)
 }
 
 // 获取所有钱包地址
