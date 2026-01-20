@@ -16,10 +16,10 @@ type Wallets struct {
 	Wallets map[string]*Wallet
 }
 
-// 创建一个新钱包集合（每个人可有多个钱包）
+// 获取/新建，钱包集合（有则返回无则返回空集合）
 func NewWallets(nodeID string) (*Wallets, error) {
-	wallets := Wallets{}                       // 创建钱包集合对象
-	wallets.Wallets = make(map[string]*Wallet) // 钱包集合对象的参数初始化
+	wallets := Wallets{}                       // 创建空钱包集合对象
+	wallets.Wallets = make(map[string]*Wallet) // 钱包集合对象的参数初始化为空
 	err := wallets.LoadFromFile(nodeID)        // 加载钱包数据
 
 	return &wallets, err
@@ -63,4 +63,15 @@ func (ws Wallets) SaveToFile(nodeID string) {
 	if err != nil {
 		log.Panic(err)
 	}
+}
+
+// 获取钱包集合中左右钱包地址
+func (ws *Wallets) GetAddresses() []string {
+	var addresses []string
+
+	for address := range ws.Wallets {
+		addresses = append(addresses, address)
+	}
+
+	return addresses
 }

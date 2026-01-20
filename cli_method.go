@@ -26,7 +26,15 @@ func (cli *CLI) createWallet(nodeID string) {
 
 // 获取所有钱包地址
 func (cli *CLI) listAddresses(nodeID string) {
+	wallets, err := NewWallets(nodeID)
+	if err != nil {
+		log.Panic(err)
+	}
+	addresses := wallets.GetAddresses()
 
+	for _, address := range addresses {
+		fmt.Println(address)
+	}
 }
 
 // 打印输出区块链上所有块
