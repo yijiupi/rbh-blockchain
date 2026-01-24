@@ -11,8 +11,17 @@ func (cli *CLI) getbalance(address, nodeID string) {
 }
 
 // 创建区块链
-func (cli *CLI) createblockchaincmd(address, nodeID string) {
+func (cli *CLI) createBlockchaincmd(address, nodeID string) {
+	if !ValidateAddress(address) {
+		log.Panic("ERROR: Address is not valid")
+	}
+	bc := CreateBlockchain(address, nodeID) // 创建区块链
+	defer bc.db.Close()
 
+	UTXOSet := UTXOSet{bc} // 区块链写入UTXO
+	UTXOSet.Reindex()      // 重建UTXO（保留未花费的输出）
+
+	fmt.Println("Done!")
 }
 
 // 创建钱包

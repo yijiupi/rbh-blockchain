@@ -15,7 +15,7 @@ var nodeAddress string                      // 当前节点ip地址和端口
 var miningAddress string                    //挖矿奖励地址 - 挖出新块的奖励发送到此地址
 var knownNodes = []string{"localhost:3000"} //已知节点列表 - 启动时已知的其他节点地址
 var blocksInTransit = [][]byte{}            //传输中的区块 - 正在从其他节点下载的区块哈希列表
-var memPool = make(map[string]Trainscation) //内存池 - 存储尚未被打包进区块的交易
+var memPool = make(map[string]Transaction)  //内存池 - 存储尚未被打包进区块的交易
 
 // 地址消息 - 用于交换节点节点间互相告知已知的其他节点地址
 type addr struct {

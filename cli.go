@@ -110,7 +110,7 @@ func (cli *CLI) Run() {
 		if *createBlockchainAddress == "" {
 			createBlockchainCmd.Usage()
 		}
-		cli.createblockchaincmd(*createBlockchainAddress, nodeID)
+		cli.createBlockchaincmd(*createBlockchainAddress, nodeID)
 	}
 	if sendCmd.Parsed() {
 		if *sendFrom == "" || *sendTo == "" || *sendAmount <= 0 {
