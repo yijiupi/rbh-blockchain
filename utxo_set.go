@@ -57,3 +57,30 @@ func (u UTXOSet) Reindex() {
 		log.Panic(err) // 回滚
 	}
 }
+
+// 获取UTXO（公钥匹配得到UTXO）
+func (u UTXOSet) GetUTXO(pubKeyHash []byte) []TxOutput {
+	var UTXOs []TxOutput
+	db := u.BlockChain.db
+	err := db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(utxoBucket))
+		c := b.Cursor() // 创建游标，遍历桶中数据
+		// k为交易ID从十六进制字符串解码为字节   v为TxOutputs.Serialize
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			outs := DeserializeOutputs(v)
+
+			for _, out := range outs.Outputs {
+				if out.IsLockedWithKey(pubKeyHash) { // 公钥匹配得到UTXO
+					UTXOs = append(UTXOs, out)
+				}
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return UTXOs
+}

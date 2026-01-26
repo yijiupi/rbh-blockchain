@@ -28,6 +28,7 @@ func (out *TxOutput) Lock(address []byte) {
 	out.PubKeyHash = pubKeyHash
 }
 
+// 序列化
 func (outs TxOutputs) Serialize() []byte {
 	var buff bytes.Buffer
 
@@ -38,4 +39,22 @@ func (outs TxOutputs) Serialize() []byte {
 	}
 
 	return buff.Bytes()
+}
+
+// 反序列化
+func DeserializeOutputs(data []byte) TxOutputs {
+	var outputs TxOutputs
+
+	dec := gob.NewDecoder(bytes.NewReader(data))
+	err := dec.Decode(&outputs)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return outputs
+}
+
+// 检查给定的公钥哈希是否与输出中存储的公钥哈希匹配
+func (out *TxOutput) IsLockedWithKey(pubKeyHash []byte) bool {
+	return bytes.Equal(out.PubKeyHash, pubKeyHash)
 }

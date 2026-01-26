@@ -7,7 +7,21 @@ import (
 
 // 查询余额
 func (cli *CLI) getbalance(address, nodeID string) {
+	if !ValidateAddress(address) {
+		log.Panic("ERROR: Address is not valid")
+	}
+	bc := GetBlockchain(nodeID) // 获取节点的区块链
+	UTXOSet := UTXOSet{bc}      // new一个UTXO
+	defer bc.db.Close()
 
+	var balance uint64
+	pubKeyHash := Base58Decode([]byte(address))    // 根据地址获取公钥
+	pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-4] // [0x00] + [公钥哈希（20字节）] + [校验和（4字节）]
+	UTXOs := UTXOSet.GetUTXO(pubKeyHash)           // 根据公钥获取UTXO得到余额
+	for _, out := range UTXOs {
+		balance += out.Value
+	}
+	fmt.Printf("Balance of '%s': %d\n", address, balance)
 }
 
 // 创建区块链
