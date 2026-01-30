@@ -37,14 +37,14 @@ func (ws *Wallets) LoadFromFile(nodeID string) error {
 		log.Panic(err)
 	}
 
-	var wallets Wallets                                     // 用于接收钱包内容
+	//var wallets Wallets                                     // 用于接收钱包内容
 	gob.Register(elliptic.P256())                           // 注册椭圆曲线
 	decoder := gob.NewDecoder(bytes.NewReader(fileContent)) // 创建gob解码器，解码文件内容
-	err = decoder.Decode(&wallets)                          // 解码器指针wallets
+	err = decoder.Decode(&ws)                               // 解码器指针wallets
 	if err != nil {
 		log.Panic(err)
 	}
-	ws.Wallets = wallets.Wallets // 将解码的钱包数据赋给当前对象
+	//ws.Wallets = wallets.Wallets // 将解码的钱包数据赋给当前对象
 	return nil
 }
 
@@ -74,4 +74,9 @@ func (ws *Wallets) GetAddresses() []string {
 	}
 
 	return addresses
+}
+
+// 获取钱包集合中具体的钱包
+func (ws Wallets) GetWallet(address string) Wallet {
+	return *ws.Wallets[address]
 }

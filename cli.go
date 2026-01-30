@@ -49,7 +49,7 @@ func (cli *CLI) Run() {
 	createBlockchainAddress := createBlockchainCmd.String("address", "", "这个地址是您的钱包地址")
 	sendFrom := sendCmd.String("from", "", "转账的发起人也是账户拥有者")
 	sendTo := sendCmd.String("to", "", "转账的接收者")
-	sendAmount := sendCmd.Int("amount", 0, "转账的金额")
+	sendAmount := sendCmd.Uint64("amount", 0, "转账的金额")
 	sendMine := sendCmd.Bool("mine", false, "设置mine节点将立即挖矿，未设置mine交易将广播到网络")
 	startNodeMiner := startNodeCmd.String("miner", "", "启动一个节点，具有挖矿的功能")
 	// 解析命令，os.Args[2:]替换参数默认值

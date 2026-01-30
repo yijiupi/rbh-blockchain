@@ -140,6 +140,15 @@ func sendData(addr string, data []byte) {
 	}
 }
 
+// 执行交易
+func sendTx(addr string, tnx *Transaction) {
+	data := tx{nodeAddress, tnx.Serialize()} // 准备我的数据，发送给其它节点执行
+	payload := gobEncode(data)
+	request := append(commandToBytes("tx"), payload...)
+
+	sendData(addr, request)
+}
+
 // 区块链 P2P 网络的消息处理器
 func handleConnection(conn net.Conn, bc *BlockChain) {
 	// 接受连接 → 读取数据 → 验证消息 → 解析命令 → 分发处理 → 响应/转发 → 清理资源

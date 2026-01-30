@@ -71,8 +71,37 @@ func (cli *CLI) reindexUTXO(nodeID string) {
 }
 
 // 转账
-func (cli *CLI) send(from, to string, amount int, nodeID string, mineNow bool) {
+func (cli *CLI) send(from, to string, amount uint64, nodeID string, mineNow bool) {
+	if !ValidateAddress(from) {
+		log.Panic("ERROR: Sender address is not valid")
+	}
+	if !ValidateAddress(to) {
+		log.Panic("ERROR: Recipient address is not valid")
+	}
 
+	bc := GetBlockchain(nodeID) // 获取当前节点的区块链
+	UTXOSet := UTXOSet{bc}
+	defer bc.db.Close()
+
+	wallets, err := NewWallets(nodeID) // 获取钱包集合
+	if err != nil {
+		log.Panic(err)
+	}
+	wallet := wallets.GetWallet(from) // 获取发送者钱包
+
+	tx := NewUTXOTransaction(&wallet, to, amount, &UTXOSet) // 新建转账交易，并签名
+
+	// 设置mine节点将立即挖矿，否则就是一笔普通转账交易
+	if mineNow {
+		cbTx := NewCoinbaseTX(from, "") // 挖出新区块，奖励10块，挖矿成功的交易
+		txs := []*Transaction{cbTx, tx} // 挖出区块的交易和转账交易放一个数组
+		newBlock := bc.MineBlock(txs)   // 交易放入新区块，并存入数据库
+		UTXOSet.Update(newBlock)        // 修改区块状态
+	} else {
+		sendTx(knownNodes[0], tx) // 让其它节点一起挖矿，发送交易，发送给其它矿工去执行交易
+	}
+
+	fmt.Println("Success!")
 }
 
 // 启动节点（节点，矿工地址）

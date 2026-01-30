@@ -206,3 +206,73 @@ func (bc *BlockChain) Iterator() *BlockchainIterator {
 	bci := &BlockchainIterator{bc.newBlockHash, bc.db}
 	return bci
 }
+
+// 挖出区块交易和转账交易数组，放入一个新区块
+func (bc *BlockChain) MineBlock(transactions []*Transaction) *Block {
+	var lastHash []byte
+	var lastHeight uint64
+	// 挖矿和转账交易的验证
+	for _, tx := range transactions {
+		// TODO: ignore transaction if it's not valid
+		// 这里面验证的是，是否为上一个区块的交易，显然不是的，这里是挖到的新区块和新转账交易，其实不用验证这里是为了保险
+		if bc.VerifyTransaction(tx) != true {
+			log.Panic("ERROR: Invalid transaction")
+		}
+	}
+	// 数据库找到区块，并得到区块的hash
+	err := bc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		lastHash = b.Get([]byte("l"))        // 最后的区块hash
+		blockData := b.Get(lastHash)         // 最后的区块数据
+		block := DeserializeBlock(blockData) // 反序列化区块数据得到区块
+		lastHeight = block.Height            // 得到最后区块的高度
+
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+	// 挖到的新区块高度加一，加入交易列表，放在新区块上
+	newBlock := NewBlock(transactions, lastHash, lastHeight+1)
+	// 新区块存储数据库
+	err = bc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		err := b.Put(newBlock.Hash, newBlock.Serialize())
+		if err != nil {
+			log.Panic(err)
+		}
+
+		err = b.Put([]byte("l"), newBlock.Hash)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		bc.newBlockHash = newBlock.Hash
+
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return newBlock
+}
+
+// 验证交易（验证上一个区块的交易）
+func (bc *BlockChain) VerifyTransaction(tx *Transaction) bool {
+	if tx.IsCoinbase() {
+		return true
+	}
+
+	prevTXs := make(map[string]Transaction)
+
+	for _, vin := range tx.Vin {
+		prevTX, err := bc.FindTransaction(vin.Txid)
+		if err != nil {
+			log.Panic(err)
+		}
+		prevTXs[hex.EncodeToString(prevTX.ID)] = prevTX
+	}
+
+	return tx.Verify(prevTXs)
+}
