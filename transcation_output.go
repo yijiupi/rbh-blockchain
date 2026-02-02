@@ -6,10 +6,10 @@ import (
 	"log"
 )
 
-// 当前交易的输出（接收者）
+// 交易的输出（UTXO）
 type TxOutput struct {
-	Value      uint64 // 交易金额
-	PubKeyHash []byte // 接收者公钥
+	Value      uint64 // 未花费的金额
+	PubKeyHash []byte // 持有人的公钥
 }
 type TxOutputs struct {
 	Outputs []TxOutput
