@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
 )
 
 // 查询余额
@@ -62,7 +63,28 @@ func (cli *CLI) listAddresses(nodeID string) {
 
 // 打印输出区块链上所有块
 func (cli *CLI) printChain(nodeID string) {
+	bc := NewBlockchain(nodeID) // 获取节点上最后一个区块的hash
+	defer bc.db.Close()
 
+	bci := bc.Iterator() // 使用程序遍历区块的内容
+
+	for {
+		block := bci.Next() // 得到区块
+
+		fmt.Printf("============ Block %x ============\n", block.Hash)
+		fmt.Printf("Height: %d\n", block.Height)
+		fmt.Printf("Prev. block: %x\n", block.PrevBlockHash)
+		pow := NewProofOfWork(block)                                  // 组装工作量证明结构体
+		fmt.Printf("PoW: %s\n\n", strconv.FormatBool(pow.Validate())) // 验证区块的工作量证明是否篡改
+		for _, tx := range block.Transactions {
+			fmt.Println(tx)
+		}
+		fmt.Printf("\n\n")
+
+		if len(block.PrevBlockHash) == 0 {
+			break
+		}
+	}
 }
 
 // 重构UTXO集合

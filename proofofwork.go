@@ -20,7 +20,7 @@ type ProofOfWork struct {
 	target *big.Int // 目标预值
 }
 
-// 新区块的工作量证明
+// 组装工作量证明结构体
 func NewProofOfWork(b *Block) *ProofOfWork {
 	target := big.NewInt(1)                  // 目标预值
 	target.Lsh(target, uint(256-targetBits)) // 左移位运算
@@ -82,4 +82,16 @@ func IntToHex(num int64) []byte {
 	}
 
 	return buff.Bytes()
+}
+
+func (pow *ProofOfWork) Validate() bool {
+	var hashInt big.Int
+
+	data := pow.prepareData(pow.block.Nonce)
+	hash := sha256.Sum256(data)
+	hashInt.SetBytes(hash[:])
+
+	isValid := hashInt.Cmp(pow.target) == -1
+
+	return isValid
 }

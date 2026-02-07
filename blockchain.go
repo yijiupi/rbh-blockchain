@@ -276,3 +276,32 @@ func (bc *BlockChain) VerifyTransaction(tx *Transaction) bool {
 
 	return tx.Verify(prevTXs)
 }
+
+// 通过节点获取当前区块链
+func NewBlockchain(nodeID string) *BlockChain {
+	dbFile := fmt.Sprintf(dbFile, nodeID) // blockchain_modeIDxxxx.db组装字符串
+	if dbExists(dbFile) == false {        // 这个文件是否存在？
+		fmt.Println("No existing blockchain found. Create one first.")
+		os.Exit(1)
+	}
+
+	var newBlockHash []byte
+	db, err := bolt.Open(dbFile, 0600, nil) // 开启数据库
+	if err != nil {
+		log.Panic(err)
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error { // 启动读写事务
+		b := tx.Bucket([]byte(blocksBucket)) // 设置bucket的值为blocks,bucket是kv集合数据库
+		newBlockHash = b.Get([]byte("l"))    // 获取bucket中的值，新区块的hash
+
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	bc := BlockChain{newBlockHash, db}
+
+	return &bc
+}
