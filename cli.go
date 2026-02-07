@@ -35,7 +35,7 @@ func (cli *CLI) Run() {
 		os.Exit(1)
 	}
 
-	// 设置命令,flagSet是命令的最小单元，代表独立的命令行参数定义
+	// 注册命令，命令架构
 	createWalletCmd := flag.NewFlagSet("createwallet", flag.ExitOnError)
 	listAddressesCmd := flag.NewFlagSet("listaddresses", flag.ExitOnError)
 	printChainCmd := flag.NewFlagSet("printchain", flag.ExitOnError)
@@ -44,7 +44,15 @@ func (cli *CLI) Run() {
 	createBlockchainCmd := flag.NewFlagSet("createblockchain", flag.ExitOnError)
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
 	startNodeCmd := flag.NewFlagSet("startnode", flag.ExitOnError)
-	// 解析您输入的命令，并加入到flagSet中，等待被执行，当调用*访问时才真正执行
+	// 初始化命令，组装参数和默认赋值
+	getBalanceAddress := getBalanceCmd.String("address", "", "这个地址是您钱包的地址")
+	createBlockchainAddress := createBlockchainCmd.String("address", "", "这个地址是您的钱包地址")
+	sendFrom := sendCmd.String("from", "", "转账的发起人也是账户拥有者")
+	sendTo := sendCmd.String("to", "", "转账的接收者")
+	sendAmount := sendCmd.Uint64("amount", 0, "转账的金额")
+	sendMine := sendCmd.Bool("mine", false, "设置mine节点将立即挖矿，未设置mine交易将广播到网络")
+	startNodeMiner := startNodeCmd.String("miner", "", "启动一个节点，具有挖矿的功能")
+	// 解析命令，os.Args[2:]替换参数默认值
 	switch os.Args[1] {
 	case "createwallet":
 		err := createWalletCmd.Parse(os.Args[2:])
@@ -91,17 +99,9 @@ func (cli *CLI) Run() {
 		os.Exit(1)
 	}
 
-	// 设置命令参数，参数值，解释
-	getBalanceAddress := getBalanceCmd.String("address", "", "这个地址是您钱包的地址")
-	createBlockchainAddress := createBlockchainCmd.String("address", "", "这个地址是您的钱包地址")
-	sendFrom := sendCmd.String("from", "", "转账的发起人也是账户拥有者")
-	sendTo := sendCmd.String("to", "", "转账的接收者")
-	sendAmount := sendCmd.Int("amount", 0, "转账的金额")
-	sendMine := sendCmd.Bool("mine", false, "设置mine节点将立即挖矿，未设置mine交易将广播到网络")
-	startNodeMiner := startNodeCmd.String("miner", "", "启动一个节点，具有挖矿的功能")
-	/** start --- 解析您输入的命令，判断是否被解析到flagSet中，若解析了返回true，可以用*解址执行**/
+	/** start --- 执行命令（Parsed判断命令是否解析，若已解析便可执行，用解析后的加*执行*/
 	if getBalanceCmd.Parsed() {
-		if *getBalanceAddress == "" {
+		if *getBalanceAddress == "" { //
 			getBalanceCmd.Usage() // 在NewFlagSet时候已经初始化了defaultUsage，打印错误信息
 		}
 		cli.getbalance(*getBalanceAddress, nodeID) // 执行命令，用*解址自动执行，并传递到执行函数
@@ -110,7 +110,7 @@ func (cli *CLI) Run() {
 		if *createBlockchainAddress == "" {
 			createBlockchainCmd.Usage()
 		}
-		cli.createblockchaincmd(*createBlockchainAddress, nodeID)
+		cli.createBlockchaincmd(*createBlockchainAddress, nodeID)
 	}
 	if sendCmd.Parsed() {
 		if *sendFrom == "" || *sendTo == "" || *sendAmount <= 0 {
@@ -128,9 +128,9 @@ func (cli *CLI) Run() {
 		}
 		cli.startNode(nodeID, *startNodeMiner)
 	}
-	/** end --- 解析您输入的命令，判断是否被解析到flagSet中，若解析了返回true，可以用*解址执行**/
+	/** end --- 执行命令结束**/
 
-	// 以下直接调用，flagSet中没有预解析数据，直接调用命令即可
+	// 执行（无需判定解析，直接执行）
 	if createWalletCmd.Parsed() {
 		cli.createWallet(nodeID)
 	}
