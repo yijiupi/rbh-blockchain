@@ -87,9 +87,13 @@ func (cli *CLI) printChain(nodeID string) {
 	}
 }
 
-// 重构UTXO集合
+// 重新构建UTXO集合，并打印交易数量
 func (cli *CLI) reindexUTXO(nodeID string) {
-
+	bc := NewBlockchain(nodeID)          // 获取当前节点的区块链
+	UTXOSet := UTXOSet{bc}               // 组装utxoset结构体
+	UTXOSet.Reindex()                    // 重建UTXO（保留未花费的输出）
+	count := UTXOSet.CountTransactions() // 交易数量
+	fmt.Printf("Done! There are %d transactions in the UTXO set.\n", count)
 }
 
 // 转账
