@@ -25,7 +25,7 @@ func (tx *Transaction) Hash() []byte {
 	var hash [32]byte
 
 	txCopy := *tx
-	//txCopy.ID = []byte{}
+	txCopy.ID = []byte{} // 关键：清空 ID，因为 ID 是待计算的哈希值。如果序列化时包含 ID，而 ID 又是对当前数据的哈希，就会形成循环依赖。
 
 	hash = sha256.Sum256(txCopy.Serialize())
 
@@ -133,9 +133,9 @@ func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transac
 		txCopy.Vin[inID].Signature = nil
 		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
 
-		dataToSign := fmt.Sprintf("%x\n", txCopy)
+		dataToSign := txCopy.Hash() // 使用交易副本的哈希
 		// 椭圆曲线签名的核心逻辑
-		r, s, err := ecdsa.Sign(rand.Reader, &privKey, []byte(dataToSign)) // 私钥和交易进行签名
+		r, s, err := ecdsa.Sign(rand.Reader, &privKey, dataToSign) // 私钥和交易进行签名
 		if err != nil {
 			log.Panic(err)
 		}
@@ -159,7 +159,8 @@ func (tx *Transaction) TrimmedCopy() Transaction {
 		outputs = append(outputs, TxOutput{vout.Value, vout.PubKeyHash})
 	}
 
-	txCopy := Transaction{tx.ID, inputs, outputs}
+	// 清空 ID，因为签名时不应依赖自身哈希
+	txCopy := Transaction{nil, inputs, outputs}
 
 	return txCopy
 }
@@ -196,10 +197,10 @@ func (tx *Transaction) Verify(prevTXs map[string]Transaction) bool {
 		x.SetBytes(vin.PubKey[:(keyLen / 2)])
 		y.SetBytes(vin.PubKey[(keyLen / 2):])
 
-		dataToVerify := fmt.Sprintf("%x\n", txCopy)
+		dataToVerify := txCopy.Hash() // 使用交易副本的哈希
 
 		rawPubKey := ecdsa.PublicKey{Curve: curve, X: &x, Y: &y}
-		if ecdsa.Verify(&rawPubKey, []byte(dataToVerify), &r, &s) == false {
+		if ecdsa.Verify(&rawPubKey, dataToVerify, &r, &s) == false {
 			return false
 		}
 		txCopy.Vin[inID].PubKey = nil
