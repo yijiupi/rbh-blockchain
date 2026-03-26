@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 
 	"github.com/boltdb/bolt"
@@ -165,63 +166,94 @@ func (bc *BlockChain) FindTransaction(ID []byte) (Transaction, error) {
 }
 
 /*
-更新UTXO
-（分两部分，第一部分当前交易的输入里面存在上一个交易的输出并且未花费的金额需要重新更新，
-第二部分，只处理当前交易的输出）
+更新 UTXO 集合（基于新挖出的区块）
+	步骤一当前交易的输入里面存在上一个交易的输出并且未花费的金额需要重新更新
+	步骤二，只处理当前交易的输出
 */
-func (u UTXOSet) Update(block *Block) {
+// 返回值：error 表示更新过程中遇到的错误
+func (u UTXOSet) Update(block *Block) error {
 	db := u.BlockChain.db
 
 	err := db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(utxoBucket))
-		// 交易列表（新区块和转账交易）内部处理输入部分
-		for _, tx := range block.Transactions {
-			if tx.IsCoinbase() == false { // 如果不是Coinbase交易（Coinbase交易没有输入）
-				for _, vin := range tx.Vin { // 遍历当前交易的每个输入
-					updatedOuts := TxOutputs{}            // 创建一个空的输出集合，用于处理上一个交易的输出，未花费的输出
-					outsBytes := b.Get(vin.Txid)          // 根据输入交易id找到，上一个交易的输出
-					outs := DeserializeOutputs(outsBytes) // 反序列化输出
+		if b == nil {
+			return fmt.Errorf("UTXO bucket not found")
+		}
 
-					for outIdx, out := range outs.Outputs { // 遍历输出
-						// 上一个交易的输出和当前交易输入里的输出一致才会呗消费，否则未被消费放入未来的交易余额里
-						if uint64(outIdx) != vin.Vout {
-							updatedOuts.Outputs = append(updatedOuts.Outputs, out) // 未花费的交易要协会数据库
-						}
-					}
-					// 判断更新后的输出列表是否为空
-					if len(updatedOuts.Outputs) == 0 {
-						// 如果所有输出都花费了，删除整个交易条目
-						err := b.Delete(vin.Txid)
-						if err != nil {
-							log.Panic(err)
-						}
-					} else {
-						// 还有未花费的输出，更新数据库
-						err := b.Put(vin.Txid, updatedOuts.Serialize())
-						if err != nil {
-							log.Panic(err)
-						}
-					}
+		// 步骤1：处理区块中所有交易的输入，删除/更新被花费的输出
+		// 使用临时 map 记录每个交易 ID 的剩余输出（用于多个输入可能引用同一交易的情况）
+		pendingUpdates := make(map[string][]TxOutput)
 
+		for _, transaction := range block.Transactions {
+			if transaction.IsCoinbase() {
+				continue // Coinbase 交易没有输入，跳过
+			}
+			for _, vin := range transaction.Vin {
+				txID := hex.EncodeToString(vin.Txid)
+
+				// 从数据库获取该交易当前的 UTXO 集合
+				outsBytes := b.Get(vin.Txid)
+				if outsBytes == nil {
+					return fmt.Errorf("UTXO not found for tx %s", txID)
+				}
+				outs := DeserializeOutputs(outsBytes)
+
+				// 构建该交易新的 UTXO 列表（移除被花费的输出）
+				var remainingOuts []TxOutput
+				for idx, out := range outs.Outputs {
+					if uint64(idx) != vin.Vout {
+						remainingOuts = append(remainingOuts, out)
+					}
+				}
+
+				// 合并到 pendingUpdates 中
+				if existing, ok := pendingUpdates[txID]; ok {
+					// 将当前剩余输出追加到已有列表中
+					pendingUpdates[txID] = append(existing, remainingOuts...)
+				} else {
+					pendingUpdates[txID] = remainingOuts
 				}
 			}
-			// 外部值处理输出部分，一旦为创世交易不需要输入所以这里只处理输出，输入有上面处理
-			newOutputs := TxOutputs{} // 新的交易输出声明
-			for _, out := range tx.Vout {
-				newOutputs.Outputs = append(newOutputs.Outputs, out)
-			}
-			// 将交易的输出存入数据库，以便下一次交易查询到
-			err := b.Put(tx.ID, newOutputs.Serialize())
+		}
+
+		// 将 pendingUpdates 中的更新写回数据库
+		for txIDHex, outputs := range pendingUpdates {
+			txIDBytes, err := hex.DecodeString(txIDHex)
 			if err != nil {
-				log.Panic(err)
+				return err
+			}
+			if len(outputs) == 0 {
+				// 所有输出都被花费，删除该交易条目
+				if err := b.Delete(txIDBytes); err != nil {
+					return err
+				}
+			} else {
+				// 更新该交易的 UTXO 条目
+				updatedOuts := TxOutputs{Outputs: outputs}
+				if err := b.Put(txIDBytes, updatedOuts.Serialize()); err != nil {
+					return err
+				}
+			}
+		}
+
+		// 步骤2：处理区块中所有交易的输出，将新产生的 UTXO 添加到数据库
+		for _, transaction := range block.Transactions {
+			// 构建该交易的输出列表（切片）
+			var newOutputs []TxOutput
+			for _, out := range transaction.Vout {
+				newOutputs = append(newOutputs, out)
+			}
+			// 包装为 TxOutputs 并写入数据库
+			outsWrapper := TxOutputs{Outputs: newOutputs}
+			if err := b.Put(transaction.ID, outsWrapper.Serialize()); err != nil {
+				return err
 			}
 		}
 
 		return nil
 	})
-	if err != nil {
-		log.Panic(err)
-	}
+
+	return err
 }
 
 // 交易数量
