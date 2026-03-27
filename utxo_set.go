@@ -19,24 +19,21 @@ type UTXOSet struct {
 }
 
 // 重建UTXO（保留未花费的输出）
-func (u UTXOSet) Reindex() {
+func (u UTXOSet) Reindex() error {
 	db := u.BlockChain.db            // 获取数据库
 	bucketName := []byte(utxoBucket) // 获取桶
 	// 闭包内发现问题
 	err := db.Update(func(tx *bolt.Tx) error { // 开始数据库事务
 		err := tx.DeleteBucket(bucketName) // 删除桶
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(bucketName); err != nil && err != bolt.ErrBucketNotFound {
 			return err
 		}
 		_, err = tx.CreateBucket(bucketName) // 创建桶
-		if err != nil {
-			return err
-		}
-		return nil // 成功完成
+		return err                           // 成功完成
 	})
 	// 闭包外处理问题
 	if err != nil {
-		log.Panic(err) // 回滚
+		return err
 	}
 
 	UTXO := u.BlockChain.FindUTXO()
@@ -57,47 +54,64 @@ func (u UTXOSet) Reindex() {
 		return nil
 	})
 	// 闭包外处理问题
-	if err != nil {
-		log.Panic(err) // 回滚
-	}
+	return err
 }
 
 // 获取UTXO（公钥匹配得到UTXO，用于查询余额）
-func (u UTXOSet) GetUTXO(pubKeyHash []byte) []TxOutput {
-	var UTXOs []TxOutput
-	db := u.BlockChain.db
+// GetUTXO 返回指定公钥哈希对应的所有 UTXO（未花费交易输出）。
+// 参数 pubKeyHash 是公钥哈希（20 字节），用于匹配输出中的锁定脚本。
+// 返回值：
+//   - UTXOs 切片，包含所有匹配的 TxOutput。
+//   - error 表示数据库操作过程中的错误（如 bucket 不存在或读取失败）。
+func (u UTXOSet) GetUTXO(pubKeyHash []byte) ([]TxOutput, error) {
+	var UTXOs []TxOutput  // 存储匹配的输出结果
+	db := u.BlockChain.db // 获取区块链数据库实例
+
+	// 使用只读事务查询数据库
 	err := db.View(func(tx *bolt.Tx) error {
+		// 获取 UTXO 桶（存储所有未花费输出）
 		b := tx.Bucket([]byte(utxoBucket))
-		c := b.Cursor() // 创建游标，遍历桶中数据
-		// k为交易ID从十六进制字符串解码为字节   v为TxOutputs.Serialize
+		if b == nil {
+			// 桶不存在，返回明确的错误信息
+			return fmt.Errorf("UTXO bucket not found")
+		}
+
+		// 创建游标遍历桶中所有键值对
+		c := b.Cursor()
+		// 遍历每一个交易输出集
 		for k, v := c.First(); k != nil; k, v = c.Next() {
+			// 反序列化输出集（该交易的所有输出）
 			outs := DeserializeOutputs(v)
 
+			// 遍历该交易中的每个输出
 			for _, out := range outs.Outputs {
-				if out.IsLockedWithKey(pubKeyHash) { // 公钥匹配得到UTXO
+				// 检查当前输出是否被给定的公钥哈希锁定
+				if out.IsLockedWithKey(pubKeyHash) {
+					// 匹配成功，添加到结果集
 					UTXOs = append(UTXOs, out)
 				}
 			}
 		}
 
-		return nil
+		return nil // 无错误，事务成功
 	})
-	if err != nil {
-		log.Panic(err)
-	}
 
-	return UTXOs
+	// 返回结果和可能的错误（错误由调用方处理）
+	return UTXOs, err
 }
 
 // 获取UTXO桶中所有的交易索引和未花费的金额（未花费的输出，用于转账）
-func (u UTXOSet) GetUnSpendableOutputs(pubkeyHash []byte, amount uint64) (uint64, map[string][]int) {
+func (u UTXOSet) GetUnSpendableOutputs(pubkeyHash []byte, amount uint64) (uint64, map[string][]int, error) {
 	unspentOutputs := make(map[string][]int) // 未花费的输出
 	var accumulated uint64                   // 未花费的金额（余额）
 	db := u.BlockChain.db                    // 发送者的钱包数据库
 
 	err := db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(utxoBucket)) // 获取UTXO桶
-		c := b.Cursor()                    // 遍历桶
+		if b == nil {
+			return fmt.Errorf("UTXO bucket not found")
+		}
+		c := b.Cursor() // 遍历桶
 
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			txID := hex.EncodeToString(k) // 解密交易id
@@ -119,14 +133,9 @@ func (u UTXOSet) GetUnSpendableOutputs(pubkeyHash []byte, amount uint64) (uint64
 				}
 			}
 		}
-
 		return nil
 	})
-	if err != nil {
-		log.Panic(err)
-	}
-
-	return accumulated, unspentOutputs
+	return accumulated, unspentOutputs, err
 }
 
 // 签名
@@ -260,23 +269,19 @@ func (u UTXOSet) Update(block *Block) error {
 }
 
 // 交易数量
-func (u UTXOSet) CountTransactions() int {
+func (u UTXOSet) CountTransactions() (int, error) {
 	db := u.BlockChain.db
 	counter := 0
-
 	err := db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(utxoBucket))
+		if b == nil {
+			return nil // 空桶也认为计数0
+		}
 		c := b.Cursor()
-
 		for k, _ := c.First(); k != nil; k, _ = c.Next() {
 			counter++
 		}
-
 		return nil
 	})
-	if err != nil {
-		log.Panic(err)
-	}
-
-	return counter
+	return counter, err
 }

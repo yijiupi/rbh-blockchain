@@ -18,7 +18,11 @@ func handleVersion(request []byte, bc *BlockChain) {
 		log.Panic(err)
 	}
 
-	myBestHeight := bc.GetBestHeight()        // 获取本地区块链的最新高度
+	myBestHeight, err := bc.GetBestHeight() // 获取本地区块链的最新高度
+	if err != nil {
+		log.Printf("GetBestHeight error: %v", err)
+		return
+	}
 	foreignerBestHeight := payload.BestHeight // 获取对方区块链的高度
 
 	if myBestHeight < foreignerBestHeight { // 比较高度对方最长合法链
@@ -34,7 +38,11 @@ func handleVersion(request []byte, bc *BlockChain) {
 
 // 组装版本信息，并在已知列表中连接种子节点
 func sendVersion(addr string, bc *BlockChain) {
-	bestHeight := bc.GetBestHeight()                                    // 新区块链的高度
+	bestHeight, err := bc.GetBestHeight() // 新区块链的高度
+	if err != nil {
+		log.Printf("sendVersion GetBestHeight error: %v", err)
+		return
+	}
 	payload := gobEncode(verzion{nodeVersion, bestHeight, nodeAddress}) // 新编码（新版本，新区块，新节点地址 ）
 	request := append(commandToBytes("version"), payload...)            // 带版本的新编码
 	sendData(addr, request)                                             // 连接种子节点

@@ -29,7 +29,12 @@ func handleTx(request []byte, bc *BlockChain) {
 	}
 
 	// 验证交易（签名、UTXO等）
-	if !bc.VerifyTransaction(&transaction) {
+	ok, err := bc.VerifyTransaction(&transaction)
+	if err != nil {
+		log.Printf("VerifyTransaction error: %v", err)
+		return
+	}
+	if !ok {
 		log.Printf("Invalid transaction received")
 		return
 	}

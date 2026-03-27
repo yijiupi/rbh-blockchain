@@ -81,9 +81,11 @@ func NewUTXOTransaction(wallet *Wallet, to string, amount uint64, UTXOSet *UTXOS
 	var inputs []TxInput // 组装TxInput列表，这里包含所有准备消费Vout
 	var outputs []TxOutput
 
-	pubKeyHash := HashPubKey(wallet.PublicKey)                                 // 发送者公钥
-	balance, validOutputs := UTXOSet.GetUnSpendableOutputs(pubKeyHash, amount) // 收集发送者UTXO的balance直至满足amount
-
+	pubKeyHash := HashPubKey(wallet.PublicKey)                                      // 发送者公钥
+	balance, validOutputs, err := UTXOSet.GetUnSpendableOutputs(pubKeyHash, amount) // 收集发送者UTXO的balance直至满足amount
+	if err != nil {
+		log.Panic(err)
+	}
 	if balance < amount {
 		log.Panic("ERROR: Not enough funds") // 余额不足
 	}

@@ -45,16 +45,15 @@ func (i *BlockchainIterator) Next() *Block {
 }
 
 // 获取当前节点的区块链（区块的hash和数据库）
-func GetBlockchain(nodeID string) *BlockChain {
+func GetBlockchain(nodeID string) (*BlockChain, error) {
 	dbFile := fmt.Sprintf(dbFile, nodeID) // blockchain_modeIDxxxx.db组装字符串
-	if dbExists(dbFile) == false {        // 判定blockchain_3000.db文件是否存在？
-		fmt.Println("区块链节点文件不存在，可以尝试创建一个")
-		os.Exit(1)
+	if !dbExists(dbFile) {
+		return nil, fmt.Errorf("区块链节点文件不存在，可以尝试创建一个")
 	}
 	var tip []byte
 	db, err := bolt.Open(dbFile, 0600, nil) // 打开数据库文件blockchain_3000.db得到数据库db
 	if err != nil {
-		log.Panic(err)
+		return nil, err
 	}
 	err = db.Update(func(tx *bolt.Tx) error { // 启动读写事务
 		b := tx.Bucket([]byte(blocksBucket)) // 从当前事务中获取名为 'blocks' 的 bucket
@@ -62,10 +61,11 @@ func GetBlockchain(nodeID string) *BlockChain {
 		return nil
 	})
 	if err != nil {
-		log.Panic(err)
+		db.Close()
+		return nil, err
 	}
 	bc := BlockChain{tip, db}
-	return &bc
+	return &bc, nil
 }
 
 // 判定blockchain_3000.db文件是否存在，若不存在返回一个错误err；判断错误err是否是文件不存在
@@ -77,22 +77,26 @@ func dbExists(dbFile string) bool {
 }
 
 // 获取区块高度
-func (bc *BlockChain) GetBestHeight() uint64 {
+func (bc *BlockChain) GetBestHeight() (uint64, error) {
 	var lastBlock Block
 
 	err := bc.db.View(func(tx *bolt.Tx) error { // 数据库中查看
-		b := tx.Bucket([]byte(blocksBucket))     // 从当前事务中获取名为 'blocks' 的 bucket
-		lastHash := b.Get([]byte("l"))           // 从 bucket 中获取键为 'l' 的值，最后一个区块的hash
-		blockData := b.Get(lastHash)             // 通过hash获取到区块的数据的二进制
+		b := tx.Bucket([]byte(blocksBucket)) // 从当前事务中获取名为 'blocks' 的 bucket
+		lastHash := b.Get([]byte("l"))       // 从 bucket 中获取键为 'l' 的值，最后一个区块的hash
+		if lastHash == nil {
+			return fmt.Errorf("no block found")
+		}
+		blockData := b.Get(lastHash) // 通过hash获取到区块的数据的二进制
+		if blockData == nil {
+			return fmt.Errorf("block data missing")
+		}
 		lastBlock = *DeserializeBlock(blockData) // 反序列化得到区块数据
-
 		return nil
 	})
 	if err != nil {
-		log.Panic(err)
+		return 0, err
 	}
-
-	return lastBlock.Height
+	return lastBlock.Height, nil
 }
 
 // 创建一个新区块链
@@ -208,73 +212,72 @@ func (bc *BlockChain) Iterator() *BlockchainIterator {
 }
 
 // 挖出区块交易和转账交易数组，放入一个新区块
-func (bc *BlockChain) MineBlock(transactions []*Transaction) *Block {
+func (bc *BlockChain) MineBlock(transactions []*Transaction) (*Block, error) {
 	var lastHash []byte
 	var lastHeight uint64
 	// 挖矿和转账交易的验证
+	// TODO: ignore transaction if it's not valid
+	// 这里面验证的是，是否为上一个区块的交易，显然不是的，这里是挖到的新区块和新转账交易，其实不用验证这里是为了保险
 	for _, tx := range transactions {
-		// TODO: ignore transaction if it's not valid
-		// 这里面验证的是，是否为上一个区块的交易，显然不是的，这里是挖到的新区块和新转账交易，其实不用验证这里是为了保险
-		if bc.VerifyTransaction(tx) != true {
-			log.Panic("ERROR: Invalid transaction")
+		if ok, err := bc.VerifyTransaction(tx); err != nil {
+			return nil, fmt.Errorf("verify transaction error: %w", err)
+		} else if !ok {
+			return nil, fmt.Errorf("invalid transaction")
 		}
 	}
 	// 数据库找到区块，并得到区块的hash
 	err := bc.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(blocksBucket))
-		lastHash = b.Get([]byte("l"))        // 最后的区块hash
-		blockData := b.Get(lastHash)         // 最后的区块数据
+		lastHash = b.Get([]byte("l")) // 最后的区块hash
+		if lastHash == nil {
+			return fmt.Errorf("no blocks in chain")
+		}
+		blockData := b.Get(lastHash) // 最后的区块数据
+		if blockData == nil {
+			return fmt.Errorf("block data missing")
+		}
 		block := DeserializeBlock(blockData) // 反序列化区块数据得到区块
 		lastHeight = block.Height            // 得到最后区块的高度
 
 		return nil
 	})
 	if err != nil {
-		log.Panic(err)
+		return nil, err
 	}
 	// 挖到的新区块高度加一，加入交易列表，放在新区块上
 	newBlock := NewBlock(transactions, lastHash, lastHeight+1)
 	// 新区块存储数据库
 	err = bc.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(blocksBucket))
-		err := b.Put(newBlock.Hash, newBlock.Serialize())
-		if err != nil {
-			log.Panic(err)
+		if err := b.Put(newBlock.Hash, newBlock.Serialize()); err != nil {
+			return err
 		}
-
-		err = b.Put([]byte("l"), newBlock.Hash)
-		if err != nil {
-			log.Panic(err)
+		if err := b.Put([]byte("l"), newBlock.Hash); err != nil {
+			return err
 		}
-
 		bc.newBlockHash = newBlock.Hash
-
 		return nil
 	})
 	if err != nil {
-		log.Panic(err)
+		return nil, err
 	}
-
-	return newBlock
+	return newBlock, nil
 }
 
 // 验证交易（验证上一个区块的交易）
-func (bc *BlockChain) VerifyTransaction(tx *Transaction) bool {
+func (bc *BlockChain) VerifyTransaction(tx *Transaction) (bool, error) {
 	if tx.IsCoinbase() {
-		return true
+		return true, nil
 	}
-
 	prevTXs := make(map[string]Transaction)
-
 	for _, vin := range tx.Vin {
 		prevTX, err := bc.FindTransaction(vin.Txid)
 		if err != nil {
-			log.Panic(err)
+			return false, fmt.Errorf("find previous tx: %w", err)
 		}
 		prevTXs[hex.EncodeToString(prevTX.ID)] = prevTX
 	}
-
-	return tx.Verify(prevTXs)
+	return tx.Verify(prevTXs), nil
 }
 
 // 通过节点获取当前区块链

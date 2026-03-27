@@ -11,17 +11,24 @@ func (cli *CLI) getbalance(address, nodeID string) {
 	if !ValidateAddress(address) {
 		log.Panic("ERROR: Address is not valid")
 	}
-	bc := GetBlockchain(nodeID) // 获取节点的区块链
-	UTXOSet := UTXOSet{bc}      // new一个UTXO
+	bc, err := GetBlockchain(nodeID) // 获取节点的区块链
+	if err != nil {
+		log.Panic(err)
+	}
 	defer bc.db.Close()
 
-	var balance uint64
+	UTXOSet := UTXOSet{bc} // new一个UTXO
+
 	pubKeyHash, err := Base58Decode([]byte(address)) // 根据地址获取公钥
 	if err != nil {
 		return
 	}
 	pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-4] // [0x00] + [公钥哈希（20字节）] + [校验和（4字节）]
-	UTXOs := UTXOSet.GetUTXO(pubKeyHash)           // 根据公钥获取UTXO得到余额
+	UTXOs, err := UTXOSet.GetUTXO(pubKeyHash)      // 根据公钥获取UTXO得到余额
+	if err != nil {
+		log.Panic(err)
+	}
+	var balance uint64
 	for _, out := range UTXOs {
 		balance += out.Value
 	}
@@ -92,10 +99,16 @@ func (cli *CLI) printChain(nodeID string) {
 
 // 重新构建UTXO集合，并打印交易数量
 func (cli *CLI) reindexUTXO(nodeID string) {
-	bc := NewBlockchain(nodeID)          // 获取当前节点的区块链
-	UTXOSet := UTXOSet{bc}               // 组装utxoset结构体
-	UTXOSet.Reindex()                    // 重建UTXO（保留未花费的输出）
-	count := UTXOSet.CountTransactions() // 交易数量
+	bc := NewBlockchain(nodeID) // 获取当前节点的区块链
+	UTXOSet := UTXOSet{bc}      // 组装utxoset结构体
+	UTXOSet.Reindex()           // 重建UTXO（保留未花费的输出）
+	if err := UTXOSet.Reindex(); err != nil {
+		log.Panic(err)
+	}
+	count, err := UTXOSet.CountTransactions() // 交易数量
+	if err != nil {
+		log.Panic(err)
+	}
 	fmt.Printf("Done! There are %d transactions in the UTXO set.\n", count)
 }
 
@@ -108,7 +121,10 @@ func (cli *CLI) send(from, to string, amount uint64, nodeID string, mineNow bool
 		log.Panic("ERROR: Recipient address is not valid")
 	}
 
-	bc := GetBlockchain(nodeID) // 获取当前节点的区块链
+	bc, err := GetBlockchain(nodeID) // 获取当前节点的区块链
+	if err != nil {
+		log.Panic(err)
+	}
 	UTXOSet := UTXOSet{bc}
 	defer bc.db.Close()
 
@@ -122,10 +138,15 @@ func (cli *CLI) send(from, to string, amount uint64, nodeID string, mineNow bool
 
 	// 设置mine节点将立即挖矿，否则就是一笔普通转账交易
 	if mineNow {
-		cbTx := NewCoinbaseTX(from, "") // 挖出新区块，奖励10块，挖矿成功的交易
-		txs := []*Transaction{cbTx, tx} // 挖出区块的交易和转账交易放一个数组
-		newBlock := bc.MineBlock(txs)   // 交易放入新区块，并存入数据库
-		UTXOSet.Update(newBlock)        // 修改区块状态
+		cbTx := NewCoinbaseTX(from, "")    // 挖出新区块，奖励10块，挖矿成功的交易
+		txs := []*Transaction{cbTx, tx}    // 挖出区块的交易和转账交易放一个数组
+		newBlock, err := bc.MineBlock(txs) // 交易放入新区块，并存入数据库
+		if err != nil {
+			log.Panic(err)
+		}
+		if err := UTXOSet.Update(newBlock); err != nil { // 修改区块状态
+			log.Panic(err)
+		}
 	} else {
 		sendTx(knownNodes[0], tx) // 让其它节点一起挖矿，发送交易，发送给其它矿工去执行交易
 	}

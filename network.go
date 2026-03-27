@@ -100,8 +100,11 @@ func StartServer(nodeID, minerAddress string) {
 	if err != nil {
 		log.Panic(err)
 	}
-	defer ln.Close()                  // 执行完毕记得关闭监听
-	bc := GetBlockchain(nodeID)       // 创建当前节点的数据库，得到当前区块hash和db
+	defer ln.Close()                 // 执行完毕记得关闭监听
+	bc, err := GetBlockchain(nodeID) // 创建当前节点的数据库，得到当前区块hash和db
+	if err != nil {
+		log.Panic(err)
+	}
 	if nodeAddress != knownNodes[0] { // 检查自己是不是那个种子节点
 		sendVersion(knownNodes[0], bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
 	}
