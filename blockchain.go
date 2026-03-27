@@ -254,6 +254,19 @@ func (bc *BlockChain) MineBlock(transactions []*Transaction) (*Block, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 清理内存池和广播记录（一次性完成）
+	// 注意：锁顺序必须统一（先 broadcastedTxsMutex，后 memPoolMutex），避免死锁
+	broadcastedTxsMutex.Lock()
+	memPoolMutex.Lock()
+	for _, tx := range newBlock.Transactions {
+		txID := hex.EncodeToString(tx.ID)
+		delete(memPool, txID)
+		delete(broadcastedTxs, txID)
+	}
+	memPoolMutex.Unlock()
+	broadcastedTxsMutex.Unlock()
+
 	return newBlock, nil
 }
 

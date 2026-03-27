@@ -18,10 +18,13 @@ var knownNodes = []string{"localhost:3000"} //已知节点列表 - 启动时已�
 var blocksInTransit = [][]byte{}            //传输中的区块 - 正在从其他节点下载的区块哈希列表
 var memPool = make(map[string]Transaction)  //内存池 - 存储尚未被打包进区块的交易
 var (
-	// 并发安全锁
+	// 并发安全锁（互斥锁）
 	knownNodesMutex      sync.RWMutex
 	memPoolMutex         sync.RWMutex
 	blocksInTransitMutex sync.RWMutex
+	// 已广播交易的去重集合
+	broadcastedTxs      = make(map[string]bool)
+	broadcastedTxsMutex sync.RWMutex
 )
 
 // 地址消息 - 用于交换节点节点间互相告知已知的其他节点地址
@@ -149,7 +152,6 @@ func sendData(addr string, data []byte) {
 		}
 		knownNodes = updatedNodes // 排除掉失败节点的新数组，赋值给已知节点列表
 		// 并非安全锁
-		knownNodes = updatedNodes
 		knownNodesMutex.Unlock()
 		return
 	}
@@ -158,7 +160,9 @@ func sendData(addr string, data []byte) {
 	// conn 是网络连接（实现了 io.Writer 接口）
 	_, err = io.Copy(conn, bytes.NewReader(data)) // 它将内存中的数据通过 TCP 连接发送出去，让服务端接收到
 	if err != nil {
-		log.Panic(err)
+		log.Printf("Failed to send data to %s: %v", addr, err)
+		// 不 panic，仅记录日志，发送失败由调用方决定是否重试（当前忽略）
+		return
 	}
 }
 
