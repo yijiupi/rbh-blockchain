@@ -2,53 +2,59 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"math/big"
 )
 
 var b58Alphabet = []byte("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
-// 解密地址
-func Base58Decode(input []byte) []byte {
-	result := big.NewInt(0) // 定义大数
-
+// Base58Decode 解码 Base58 字符串，返回字节数组和错误
+func Base58Decode(input []byte) ([]byte, error) {
+	if len(input) == 0 {
+		return nil, fmt.Errorf("empty input")
+	}
+	result := big.NewInt(0)
 	for _, b := range input {
-		charIndex := bytes.IndexByte(b58Alphabet, b)     // b在b58Alphabet中的位置
-		result.Mul(result, big.NewInt(58))               // 乘法58
-		result.Add(result, big.NewInt(int64(charIndex))) // 加法，加charIndex
+		charIndex := bytes.IndexByte(b58Alphabet, b)
+		if charIndex < 0 {
+			return nil, fmt.Errorf("invalid base58 character: %c", b)
+		}
+		result.Mul(result, big.NewInt(58))
+		result.Add(result, big.NewInt(int64(charIndex)))
 	}
-
-	decoded := result.Bytes() // 大数转字节
-
-	if input[0] == b58Alphabet[0] { // 地址的第一位和
-		decoded = append([]byte{0x00}, decoded...) // ...展开切片
+	decoded := result.Bytes()
+	// 处理前导零（统计开头的 '1' 数量）
+	zeroCount := 0
+	for zeroCount < len(input) && input[zeroCount] == b58Alphabet[0] {
+		zeroCount++
 	}
-	return decoded
+	// 在解码结果前添加对应数量的 0x00
+	decoded = append(bytes.Repeat([]byte{0x00}, zeroCount), decoded...)
+	return decoded, nil
 }
 
-// 加密地址
+// Base58Encode 将字节数组编码为 Base58 字符串
 func Base58Encode(input []byte) []byte {
 	var result []byte
-
 	x := big.NewInt(0).SetBytes(input)
-
 	base := big.NewInt(int64(len(b58Alphabet)))
 	zero := big.NewInt(0)
 	mod := &big.Int{}
-
 	for x.Cmp(zero) != 0 {
 		x.DivMod(x, base, mod)
 		result = append(result, b58Alphabet[mod.Int64()])
 	}
-
-	// https://en.bitcoin.it/wiki/Base58Check_encoding#Version_bytes
-	if input[0] == 0x00 {
+	// 处理前导零
+	for _, b := range input {
+		if b != 0x00 {
+			break
+		}
 		result = append(result, b58Alphabet[0])
 	}
-
 	ReverseBytes(result)
-
 	return result
 }
+
 func ReverseBytes(data []byte) {
 	for i, j := 0, len(data)-1; i < j; i, j = i+1, j-1 {
 		data[i], data[j] = data[j], data[i]
