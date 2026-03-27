@@ -305,3 +305,53 @@ func NewBlockchain(nodeID string) *BlockChain {
 
 	return &bc
 }
+
+// AddBlock 将已验证的区块添加到区块链（包括数据库存储）
+func (bc *BlockChain) AddBlock(block *Block) error {
+	err := bc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if b == nil {
+			return fmt.Errorf("blocks bucket not found")
+		}
+
+		// 检查区块是否已存在（可选，避免重复写入）
+		existing := b.Get(block.Hash)
+		if existing != nil {
+			return nil // 区块已存在，跳过
+		}
+
+		// 序列化并存储区块
+		err := b.Put(block.Hash, block.Serialize())
+		if err != nil {
+			return err
+		}
+
+		// 更新最新区块哈希（'l' 键）
+		err = b.Put([]byte("l"), block.Hash)
+		if err != nil {
+			return err
+		}
+
+		bc.newBlockHash = block.Hash
+		return nil
+	})
+	return err
+}
+
+// FindBlock 根据区块哈希查找区块，返回区块和错误
+func (bc *BlockChain) FindBlock(hash []byte) (*Block, error) {
+	var block *Block
+	err := bc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if b == nil {
+			return fmt.Errorf("blocks bucket not found")
+		}
+		data := b.Get(hash)
+		if data == nil {
+			return fmt.Errorf("block %x not found", hash)
+		}
+		block = DeserializeBlock(data)
+		return nil
+	})
+	return block, err
+}

@@ -149,6 +149,18 @@ func sendTx(addr string, tnx *Transaction) {
 	sendData(addr, request)
 }
 
+// sendGetData 发送 getdata 消息，请求特定数据（区块或交易）
+func sendGetData(addr, kind string, id []byte) {
+	payload := getData{
+		AddrFrom: nodeAddress,
+		Type:     kind,
+		ID:       id,
+	}
+	data := gobEncode(payload)
+	request := append(commandToBytes("getdata"), data...)
+	sendData(addr, request)
+}
+
 // 区块链 P2P 网络的消息处理器
 func handleConnection(conn net.Conn, bc *BlockChain) {
 	// 接受连接 → 读取数据 → 验证消息 → 解析命令 → 分发处理 → 响应/转发 → 清理资源
