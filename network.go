@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 )
 
 const protocol = "tcp"
@@ -16,6 +17,12 @@ var miningAddress string                    //挖矿奖励地址 - 挖出新块�
 var knownNodes = []string{"localhost:3000"} //已知节点列表 - 启动时已知的其他节点地址
 var blocksInTransit = [][]byte{}            //传输中的区块 - 正在从其他节点下载的区块哈希列表
 var memPool = make(map[string]Transaction)  //内存池 - 存储尚未被打包进区块的交易
+var (
+	// 并发安全锁
+	knownNodesMutex      sync.RWMutex
+	memPoolMutex         sync.RWMutex
+	blocksInTransitMutex sync.RWMutex
+)
 
 // 地址消息 - 用于交换节点节点间互相告知已知的其他节点地址
 type addr struct {
@@ -106,7 +113,11 @@ func StartServer(nodeID, minerAddress string) {
 		log.Panic(err)
 	}
 	if nodeAddress != knownNodes[0] { // 检查自己是不是那个种子节点
-		sendVersion(knownNodes[0], bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
+		// 并非安全锁，安全读取种子节点
+		knownNodesMutex.RLock()
+		seed := knownNodes[0]
+		knownNodesMutex.RUnlock()
+		sendVersion(seed, bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
 	}
 
 	// 服务端等待其它节点来连接
@@ -125,6 +136,8 @@ func sendData(addr string, data []byte) {
 	if err != nil {
 		fmt.Printf("%s is not available\n", addr)
 		var updatedNodes []string
+		// 并非安全锁
+		knownNodesMutex.Lock()
 		// 若报错说明addr是个失败节点，需要删除
 		for _, node := range knownNodes {
 			if node != addr {
@@ -132,6 +145,9 @@ func sendData(addr string, data []byte) {
 			}
 		}
 		knownNodes = updatedNodes // 排除掉失败节点的新数组，赋值给已知节点列表
+		// 并非安全锁
+		knownNodes = updatedNodes
+		knownNodesMutex.Unlock()
 		return
 	}
 	defer conn.Close()

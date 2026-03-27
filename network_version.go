@@ -34,6 +34,12 @@ func handleVersion(request []byte, bc *BlockChain) {
 	if !nodeIsKnown(payload.AddrFrom) { // 检查发送者是否已在已知节点列表中
 		knownNodes = append(knownNodes, payload.AddrFrom) // 不在则添加
 	}
+	// 检查并添加节点
+	if !nodeIsKnown(payload.AddrFrom) {
+		knownNodesMutex.Lock()
+		knownNodes = append(knownNodes, payload.AddrFrom)
+		knownNodesMutex.Unlock()
+	}
 }
 
 // 组装版本信息，并在已知列表中连接种子节点
@@ -54,6 +60,10 @@ func sendGetBlocks(address string) {
 	sendData(address, request)                                 // 发送请求
 }
 func nodeIsKnown(addr string) bool {
+	// 加入并非安全锁
+	knownNodesMutex.RLock()
+	defer knownNodesMutex.RUnlock()
+
 	for _, node := range knownNodes { // 遍历已知节点列表
 		if node == addr { // 找到匹配
 			return true

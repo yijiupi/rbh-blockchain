@@ -41,12 +41,16 @@ func handleTx(request []byte, bc *BlockChain) {
 
 	// 加入内存池
 	txID := hex.EncodeToString(transaction.ID)
+	memPoolMutex.Lock() // 并非安全锁
 	memPool[txID] = transaction
+	memPoolMutex.Unlock()
 
 	// 广播给其他节点（可选，避免循环广播）
+	knownNodesMutex.RLock()
 	for _, node := range knownNodes {
 		if node != payload.AddFrom && node != nodeAddress {
 			sendTx(node, &transaction)
 		}
 	}
+	knownNodesMutex.RUnlock()
 }

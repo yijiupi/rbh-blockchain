@@ -48,10 +48,12 @@ func handleBlock(request []byte, bc *BlockChain) {
 	fmt.Printf("Received and added block %x\n", newBlock.Hash)
 
 	// 如果还有更多区块在传输中，继续请求
+	blocksInTransitMutex.Lock() // 并非安全锁
 	if len(blocksInTransit) > 0 {
 		// 移除已收到的区块哈希（可选）
 		// 发送 getdata 请求下一个区块
 		sendGetData(payload.AddrFrom, "block", blocksInTransit[0])
 		blocksInTransit = blocksInTransit[1:]
 	}
+	blocksInTransitMutex.Unlock()
 }
