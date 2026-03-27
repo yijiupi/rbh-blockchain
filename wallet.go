@@ -22,7 +22,10 @@ type Wallet struct {
 // 验证钱包地址
 func ValidateAddress(address string) bool {
 	// 版本字节+pubKey+校验和
-	pubKeyHash := Base58Decode([]byte(address))                       // 解密address得到pubKey
+	pubKeyHash, err := Base58Decode([]byte(address)) // 解密address得到pubKey
+	if err != nil {
+		return false
+	}
 	actualChecksum := pubKeyHash[len(pubKeyHash)-addressChecksumLen:] // 校验和：获取切片最后四位
 	version := pubKeyHash[0]                                          // 版本字节：获取切片第一位
 	pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-addressChecksumLen]   // 公钥：获取切片中间部分（上面的剩余部分）

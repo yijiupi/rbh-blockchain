@@ -16,7 +16,10 @@ func (cli *CLI) getbalance(address, nodeID string) {
 	defer bc.db.Close()
 
 	var balance uint64
-	pubKeyHash := Base58Decode([]byte(address))    // 根据地址获取公钥
+	pubKeyHash, err := Base58Decode([]byte(address)) // 根据地址获取公钥
+	if err != nil {
+		return
+	}
 	pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-4] // [0x00] + [公钥哈希（20字节）] + [校验和（4字节）]
 	UTXOs := UTXOSet.GetUTXO(pubKeyHash)           // 根据公钥获取UTXO得到余额
 	for _, out := range UTXOs {

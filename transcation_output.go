@@ -23,7 +23,10 @@ func NewTxOutput(value uint64, address string) *TxOutput {
 }
 
 func (out *TxOutput) Lock(address []byte) {
-	pubKeyHash := Base58Decode(address)
+	pubKeyHash, err := Base58Decode(address)
+	if err != nil {
+		return
+	}
 	pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-4]
 	out.PubKeyHash = pubKeyHash
 }
