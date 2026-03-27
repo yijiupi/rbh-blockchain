@@ -197,7 +197,10 @@ func (u UTXOSet) Update(block *Block) error {
 					return fmt.Errorf("UTXO not found for tx %s", txID)
 				}
 				outs := DeserializeOutputs(outsBytes)
-
+				// 边界检查
+				if int(vin.Vout) >= len(outs.Outputs) {
+					return fmt.Errorf("Vout index %d out of range for tx %s", vin.Vout, txID)
+				}
 				// 构建该交易新的 UTXO 列表（移除被花费的输出）
 				var remainingOuts []TxOutput
 				for idx, out := range outs.Outputs {

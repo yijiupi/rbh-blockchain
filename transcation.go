@@ -130,6 +130,10 @@ func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transac
 	// 循环当前交易副本的input
 	for inID, vin := range txCopy.Vin {
 		prevTx := prevTXs[hex.EncodeToString(vin.Txid)] // 当前交易成为上一个交易的
+		// 边界检查
+		if int(vin.Vout) >= len(prevTx.Vout) {
+			log.Panic("ERROR: Vout index out of range")
+		}
 		txCopy.Vin[inID].Signature = nil
 		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
 
@@ -182,6 +186,10 @@ func (tx *Transaction) Verify(prevTXs map[string]Transaction) bool {
 
 	for inID, vin := range tx.Vin {
 		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
+		// 边界检查
+		if int(vin.Vout) >= len(prevTx.Vout) {
+			log.Panic("ERROR: Vout index out of range")
+		}
 		txCopy.Vin[inID].Signature = nil
 		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
 
