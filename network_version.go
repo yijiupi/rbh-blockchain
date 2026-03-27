@@ -15,7 +15,8 @@ func handleVersion(request []byte, bc *BlockChain) {
 	dec := gob.NewDecoder(&buff)        // gob 解码器（Go的二进制序列化格式）
 	err := dec.Decode(&payload)         // 将缓冲区数据解码到 payload 结构体中
 	if err != nil {
-		log.Panic(err)
+		log.Printf("handleVersion decode error: %v", err)
+		return
 	}
 
 	myBestHeight, err := bc.GetBestHeight() // 获取本地区块链的最新高度

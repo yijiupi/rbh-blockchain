@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 
 	"github.com/boltdb/bolt"
 )
@@ -139,18 +138,17 @@ func (u UTXOSet) GetUnSpendableOutputs(pubkeyHash []byte, amount uint64) (uint64
 }
 
 // 签名
-func (bc *BlockChain) SignTransaction(tx *Transaction, privKey ecdsa.PrivateKey) {
-	prevTXs := make(map[string]Transaction) // 声明上一个交易
-
+func (bc *BlockChain) SignTransaction(tx *Transaction, privKey ecdsa.PrivateKey) error {
+	prevTXs := make(map[string]Transaction) // 声明一个切片用于存储前面所有的交易的id
+	// 遍历所有交易的输入，并按交易id查询交易，确保交易存在，并将之前所有交易id放入切片中
 	for _, vin := range tx.Vin {
-		prevTX, err := bc.FindTransaction(vin.Txid) // 查询上一个交易
+		prevTX, err := bc.FindTransaction(vin.Txid)
 		if err != nil {
-			log.Panic(err)
+			return fmt.Errorf("find previous tx: %w", err)
 		}
 		prevTXs[hex.EncodeToString(prevTX.ID)] = prevTX
 	}
-
-	tx.Sign(privKey, prevTXs)
+	return tx.Sign(privKey, prevTXs)
 }
 
 // 根据交易id查询交易

@@ -109,47 +109,54 @@ func NewUTXOTransaction(wallet *Wallet, to string, amount uint64, UTXOSet *UTXOS
 		outputs = append(outputs, *NewTxOutput(balance-amount, from)) // 为了将from的string类型转为公钥的byte类型
 	}
 
-	tx := Transaction{nil, inputs, outputs}                    // 完成交易结构体组装
-	tx.ID = tx.Hash()                                          // 生成交易的id
-	UTXOSet.BlockChain.SignTransaction(&tx, wallet.PrivateKey) // 交易和私钥去签名
+	tx := Transaction{nil, inputs, outputs}                               // 完成交易结构体组装
+	tx.ID = tx.Hash()                                                     // 生成交易的id
+	signerr := UTXOSet.BlockChain.SignTransaction(&tx, wallet.PrivateKey) // 交易和私钥去签名
+	if signerr != nil {
+		log.Printf("Sign transaction error: %v", err)
+		// 可根据需要返回 nil 或 panic直接崩溃，这里我们只打印日志
+	}
 
 	return &tx //交易数据已经完全组装完成内容无空
 }
 
 // 签名（当前交易里，我的私钥，我上一次的交易）
-func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transaction) {
+func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transaction) error {
 	if tx.IsCoinbase() { // 验证时否时coinbase交易
-		return
+		return nil
 	}
-	// 当前交易的vin.Txid是上一个交易prevTXs的key
+	// 验证当前交易的所有输入所引用的前序交易是否都存在
 	for _, vin := range tx.Vin {
-		if prevTXs[hex.EncodeToString(vin.Txid)].ID == nil { // 得到上一个交易是否存在
-			log.Panic("ERROR: Previous transaction is not correct")
+		if prevTXs[hex.EncodeToString(vin.Txid)].ID == nil {
+			return fmt.Errorf("previous transaction not found")
 		}
 	}
-
-	txCopy := tx.TrimmedCopy() // 当前交易复制一份（为了签名，input里签名和公钥必须是nil才好签名）
-	// 循环当前交易副本的input
+	// 当前交易复制一份（为了签名，input里签名和公钥必须是nil才好签名）
+	txCopy := tx.TrimmedCopy()
 	for inID, vin := range txCopy.Vin {
-		prevTx := prevTXs[hex.EncodeToString(vin.Txid)] // 当前交易成为上一个交易的
-		// 边界检查
+		// 获取上一个交易的输出
+		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
+		// 边界检查（正常时uint32，我用的uint64所以需要检查）
 		if int(vin.Vout) >= len(prevTx.Vout) {
-			log.Panic("ERROR: Vout index out of range")
+			return fmt.Errorf("vout index out of range")
 		}
+		// 复制交易设置空签名和公钥
 		txCopy.Vin[inID].Signature = nil
 		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
-
-		dataToSign := txCopy.Hash() // 使用交易副本的哈希
+		// 交易进行hash用于签名
+		dataToSign := txCopy.Hash()
 		// 椭圆曲线签名的核心逻辑
-		r, s, err := ecdsa.Sign(rand.Reader, &privKey, dataToSign) // 私钥和交易进行签名
+		r, s, err := ecdsa.Sign(rand.Reader, &privKey, dataToSign)
 		if err != nil {
-			log.Panic(err)
+			return fmt.Errorf("ecdsa sign: %w", err)
 		}
+		// 签名成功
 		signature := append(r.Bytes(), s.Bytes()...)
-
-		tx.Vin[inID].Signature = signature // 得到签名给tx赋值，tx最终所有参数都组装完成
+		// 签名成功，赋值给交易，为了安全把副本制空
+		tx.Vin[inID].Signature = signature
 		txCopy.Vin[inID].PubKey = nil
 	}
+	return nil
 }
 
 // 复制当前的交易

@@ -6,6 +6,10 @@ import (
 	"strconv"
 )
 
+/**
+CLI 命令中调用这些函数后需处理返回的错误
+由于 CLI 是交互式，可以保留 log.Panic 简化，但内部函数已改为返回错误，确保了灵活性。
+**/
 // 查询余额
 func (cli *CLI) getbalance(address, nodeID string) {
 	if !ValidateAddress(address) {
@@ -40,7 +44,10 @@ func (cli *CLI) createBlockchaincmd(address, nodeID string) {
 	if !ValidateAddress(address) {
 		log.Panic("ERROR: Address is not valid")
 	}
-	bc := CreateBlockchain(address, nodeID) // 创建区块链
+	bc, err := CreateBlockchain(address, nodeID) // 创建区块链
+	if err != nil {
+		log.Panic(err) // 暂时用 panic，后续可优化
+	}
 	defer bc.db.Close()
 
 	UTXOSet := UTXOSet{bc} // 区块链写入UTXO
@@ -73,7 +80,10 @@ func (cli *CLI) listAddresses(nodeID string) {
 
 // 打印输出区块链上所有块
 func (cli *CLI) printChain(nodeID string) {
-	bc := NewBlockchain(nodeID) // 获取节点上最后一个区块的hash
+	bc, err := NewBlockchain(nodeID) // 获取节点上最后一个区块的hash
+	if err != nil {
+		log.Panic(err) // 暂时用 panic，后续可改为更优雅的错误处理
+	}
 	defer bc.db.Close()
 
 	bci := bc.Iterator() // 使用程序遍历区块的内容
@@ -99,9 +109,12 @@ func (cli *CLI) printChain(nodeID string) {
 
 // 重新构建UTXO集合，并打印交易数量
 func (cli *CLI) reindexUTXO(nodeID string) {
-	bc := NewBlockchain(nodeID) // 获取当前节点的区块链
-	UTXOSet := UTXOSet{bc}      // 组装utxoset结构体
-	UTXOSet.Reindex()           // 重建UTXO（保留未花费的输出）
+	bc, err := NewBlockchain(nodeID) // 获取当前节点的区块链
+	if err != nil {
+		log.Panic(err) // 暂时用 panic，后续可改为更优雅的错误处理
+	}
+	UTXOSet := UTXOSet{bc} // 组装utxoset结构体
+	UTXOSet.Reindex()      // 重建UTXO（保留未花费的输出）
 	if err := UTXOSet.Reindex(); err != nil {
 		log.Panic(err)
 	}
@@ -138,7 +151,10 @@ func (cli *CLI) send(from, to string, amount uint64, nodeID string, mineNow bool
 
 	// 设置mine节点将立即挖矿，否则就是一笔普通转账交易
 	if mineNow {
-		cbTx := NewCoinbaseTX(from, "")    // 挖出新区块，奖励10块，挖矿成功的交易
+		cbTx, err := NewCoinbaseTX(from, "") // 挖出新区块，奖励10块，挖矿成功的交易
+		if err != nil {
+			log.Panic(err) // 暂时用 panic，后续可优化
+		}
 		txs := []*Transaction{cbTx, tx}    // 挖出区块的交易和转账交易放一个数组
 		newBlock, err := bc.MineBlock(txs) // 交易放入新区块，并存入数据库
 		if err != nil {

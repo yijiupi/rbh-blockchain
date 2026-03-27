@@ -105,12 +105,14 @@ func StartServer(nodeID, minerAddress string) {
 	miningAddress = minerAddress                      // 奖励矿工地址
 	ln, err := net.Listen(protocol, nodeAddress)      // 服务端监听传入连接localshot:3000
 	if err != nil {
-		log.Panic(err)
+		//log.Panic(err)
+		log.Fatalf("Listen error: %v", err) // 这种致命错误可以退出
 	}
 	defer ln.Close()                 // 执行完毕记得关闭监听
 	bc, err := GetBlockchain(nodeID) // 创建当前节点的数据库，得到当前区块hash和db
 	if err != nil {
-		log.Panic(err)
+		log.Printf("GetBlockchain error: %v", err)
+		return
 	}
 	if nodeAddress != knownNodes[0] { // 检查自己是不是那个种子节点
 		// 并非安全锁，安全读取种子节点
@@ -124,7 +126,8 @@ func StartServer(nodeID, minerAddress string) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Panic(err)
+			log.Printf("Accept error: %v", err)
+			continue
 		}
 		go handleConnection(conn, bc) // 监测到其它节点连接，处理连接同步数据到db
 	}

@@ -16,7 +16,8 @@ func handleAddr(request []byte) {
 	dec := gob.NewDecoder(&buff)        // 创建一个gob解码器，连接到缓冲区
 	err := dec.Decode(&payload)         // 将缓冲区中的二进制数据解码到payload变量中
 	if err != nil {                     // 如果解码失败（如数据格式不对），程序会panic并终止
-		log.Panic(err)
+		log.Printf("handleAddr decode error: %v", err)
+		return
 	}
 
 	knownNodesMutex.Lock()                               // 并非安全锁
