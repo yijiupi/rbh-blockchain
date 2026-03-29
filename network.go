@@ -133,7 +133,15 @@ func StartServer(nodeID, minerAddress string) {
 		knownNodesMutex.RUnlock()
 		sendVersion(seed, bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
 	}
-
+	// ========== 启动区块下载管理器（并发下载） ==========
+	// 使用 atomic bool 或普通 bool + 互斥锁确保只启动一次
+	if !downloaderStarted {
+		// 启动后台 goroutine，负责管理区块的并发下载、超时重试等
+		go downloadManager(bc)
+		downloaderStarted = true
+		log.Println("Block download manager started")
+	}
+	// =================================================
 	// 服务端等待其它节点来连接
 	for {
 		conn, err := ln.Accept()
@@ -142,10 +150,6 @@ func StartServer(nodeID, minerAddress string) {
 			continue
 		}
 		go handleConnection(conn, bc) // 监测到其它节点连接，处理连接同步数据到db
-	}
-	if !downloaderStarted {
-		go downloadManager(bc)
-		downloaderStarted = true
 	}
 }
 
