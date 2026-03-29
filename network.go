@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 )
 
 const protocol = "tcp"
@@ -25,6 +26,14 @@ var (
 	// 已广播交易的去重集合
 	broadcastedTxs      = make(map[string]bool)
 	broadcastedTxsMutex sync.RWMutex
+)
+var (
+	// 待下载区块队列（避免重复）
+	blocksToDownload  = make(map[string]bool)      // key = 区块哈希字符串
+	downloadingBlocks = make(map[string]time.Time) // 正在下载的区块及请求时间
+	downloadRetries   = make(map[string]int)       // 重试次数
+	downloadMutex     sync.RWMutex
+	downloaderStarted bool
 )
 
 // 地址消息 - 用于交换节点节点间互相告知已知的其他节点地址
@@ -133,6 +142,10 @@ func StartServer(nodeID, minerAddress string) {
 			continue
 		}
 		go handleConnection(conn, bc) // 监测到其它节点连接，处理连接同步数据到db
+	}
+	if !downloaderStarted {
+		go downloadManager(bc)
+		downloaderStarted = true
 	}
 }
 

@@ -21,18 +21,14 @@ func handleInv(request []byte, bc *BlockChain) {
 
 	switch payload.Type {
 	case "block":
-		// 对方告知有新区块，检查本地是否已存在
-		blocksInTransitMutex.Lock() // 并非安全锁
-		blocksInTransit = payload.Items
-		if len(blocksInTransit) == 0 {
-			blocksInTransitMutex.Unlock()
-			return
+		downloadMutex.Lock()
+		for _, hash := range payload.Items {
+			hashStr := hex.EncodeToString(hash)
+			if _, downloading := downloadingBlocks[hashStr]; !downloading {
+				blocksToDownload[hashStr] = true
+			}
 		}
-		// 请求第一个区块
-		sendGetData(payload.AddrFrom, "block", blocksInTransit[0])
-		blocksInTransit = blocksInTransit[1:]
-		blocksInTransitMutex.Unlock()
-
+		downloadMutex.Unlock()
 	case "tx":
 		// 对方告知有新交易，检查内存池是否已存在，若不存在则请求
 		memPoolMutex.RLock()
