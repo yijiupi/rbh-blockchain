@@ -17,6 +17,9 @@ type MerkleNode struct {
 // 新建一个默克尔树（当前交易数据加入默克尔树，最终返回根节点）
 func NewMerkleTree(data [][]byte) *MerkleTree {
 	var nodes []MerkleNode
+	if len(data) == 0 {
+		return &MerkleTree{nil}
+	}
 	// 奇数检查，例如交易数据集合为: [A, B, C] (3个，奇数)复制后: [A, B, C, C] (4个，偶数)
 	if len(data)%2 != 0 {
 		data = append(data, data[len(data)-1])
@@ -27,7 +30,8 @@ func NewMerkleTree(data [][]byte) *MerkleTree {
 		nodes = append(nodes, *node)           // 默克尔节点的指针合集[HashA, HashB, HashC, HashC]
 	}
 	// 开始构建树的循环。循环次数为 len(data)/2，因为每轮会将节点数量减半。
-	for i := 0; i < len(data)/2; i++ {
+	//for i := 0; i < len(data)/2; i++ {
+	for len(nodes) > 1 {
 		var newLevel []MerkleNode // 声明一个新的切片，用于存储当前层构建出的父节点
 		// 循环遍历当前层的节点，每次取2个，左右节点[AB, CC]
 		for j := 0; j < len(nodes); j += 2 {

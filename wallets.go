@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"crypto/elliptic"
 	"encoding/gob"
 	"fmt"
-	"log"
 	"os"
 )
 
@@ -25,44 +23,64 @@ func NewWallets(nodeID string) (*Wallets, error) {
 	return &wallets, err
 }
 
-// 解码钱包内容
+// LoadFromFile 从磁盘文件加载钱包集合
 func (ws *Wallets) LoadFromFile(nodeID string) error {
-	walletFile := fmt.Sprintf(walletFile, nodeID)          // 钱包文件
-	if _, err := os.Stat(walletFile); os.IsNotExist(err) { // 检查钱包文件是否存在
-		return err
+	walletFile := fmt.Sprintf(walletFile, nodeID) // 例如 "wallet_3000.dat"
+	if _, err := os.Stat(walletFile); os.IsNotExist(err) {
+		return err // 文件不存在，返回错误
 	}
 
-	fileContent, err := os.ReadFile(walletFile) // 获取钱包文件内容
-	if err != nil {                             // 钱包不存在
-		log.Panic(err)
-	}
-
-	//var wallets Wallets                                     // 用于接收钱包内容
-	gob.Register(elliptic.P256())                           // 注册椭圆曲线
-	decoder := gob.NewDecoder(bytes.NewReader(fileContent)) // 创建gob解码器，解码文件内容
-	err = decoder.Decode(&ws)                               // 解码器指针wallets
+	fileContent, err := os.ReadFile(walletFile)
 	if err != nil {
-		log.Panic(err)
+		return fmt.Errorf("read wallet file: %w", err)
 	}
-	//ws.Wallets = wallets.Wallets // 将解码的钱包数据赋给当前对象
+
+	// 反序列化为 map[string][]byte
+	var serializedMap map[string][]byte
+	// gob.Register(elliptic.P256()) // 已弃用：Go 1.23+ 无法序列化曲线类型，改用 x509 序列化
+	decoder := gob.NewDecoder(bytes.NewReader(fileContent))
+	if err := decoder.Decode(&serializedMap); err != nil {
+		return fmt.Errorf("decode wallet data: %w", err)
+	}
+
+	// 初始化钱包映射
+	if ws.Wallets == nil {
+		ws.Wallets = make(map[string]*Wallet)
+	}
+
+	// 遍历每个钱包的序列化数据，逐一恢复
+	for address, walletData := range serializedMap {
+		wallet, err := DeserializeWallet(walletData) // 使用 x509 反序列化函数
+		if err != nil {
+			return fmt.Errorf("deserialize wallet for address %s: %w", address, err)
+		}
+		ws.Wallets[address] = wallet
+	}
+
 	return nil
 }
 
 // 保存钱包到文件
-func (ws Wallets) SaveToFile(nodeID string) {
-	var content bytes.Buffer                      // 缓冲区
-	walletFile := fmt.Sprintf(walletFile, nodeID) // 钱包文件名称
-	gob.Register(elliptic.P256())                 // 注册椭圆曲线gob中
-	encoder := gob.NewEncoder(&content)           // 创建gob编码器，编码器指针content
-	err := encoder.Encode(ws)                     // 编码器给ws加编码
-	if err != nil {
-		log.Panic(err)
+func (ws Wallets) SaveToFile(nodeID string) error {
+	serializedMap := make(map[string][]byte)
+	for addr, wallet := range ws.Wallets {
+		data, err := wallet.Serialize()
+		if err != nil {
+			return fmt.Errorf("serialize wallet %s: %w", addr, err)
+		}
+		serializedMap[addr] = data
 	}
-
-	err = os.WriteFile(walletFile, content.Bytes(), 0644) // 钱包集合写入磁盘，用户可读写其它人只读
-	if err != nil {
-		log.Panic(err)
+	var content bytes.Buffer
+	walletFile := fmt.Sprintf(walletFile, nodeID)
+	// gob.Register(elliptic.P256()) // 已弃用：Go 1.23+ 无法序列化曲线类型，改用 x509 序列化
+	encoder := gob.NewEncoder(&content)
+	if err := encoder.Encode(serializedMap); err != nil {
+		return fmt.Errorf("encode wallets: %w", err)
 	}
+	if err := os.WriteFile(walletFile, content.Bytes(), 0644); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+	return nil
 }
 
 // 获取钱包集合中左右钱包地址

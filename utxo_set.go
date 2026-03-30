@@ -5,7 +5,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"errors"
-	"log"
+	"fmt"
 
 	"github.com/boltdb/bolt"
 )
@@ -18,24 +18,21 @@ type UTXOSet struct {
 }
 
 // 重建UTXO（保留未花费的输出）
-func (u UTXOSet) Reindex() {
+func (u UTXOSet) Reindex() error {
 	db := u.BlockChain.db            // 获取数据库
 	bucketName := []byte(utxoBucket) // 获取桶
 	// 闭包内发现问题
 	err := db.Update(func(tx *bolt.Tx) error { // 开始数据库事务
 		err := tx.DeleteBucket(bucketName) // 删除桶
-		if err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(bucketName); err != nil && err != bolt.ErrBucketNotFound {
 			return err
 		}
 		_, err = tx.CreateBucket(bucketName) // 创建桶
-		if err != nil {
-			return err
-		}
-		return nil // 成功完成
+		return err                           // 成功完成
 	})
 	// 闭包外处理问题
 	if err != nil {
-		log.Panic(err) // 回滚
+		return err
 	}
 
 	UTXO := u.BlockChain.FindUTXO()
@@ -56,47 +53,64 @@ func (u UTXOSet) Reindex() {
 		return nil
 	})
 	// 闭包外处理问题
-	if err != nil {
-		log.Panic(err) // 回滚
-	}
+	return err
 }
 
 // 获取UTXO（公钥匹配得到UTXO，用于查询余额）
-func (u UTXOSet) GetUTXO(pubKeyHash []byte) []TxOutput {
-	var UTXOs []TxOutput
-	db := u.BlockChain.db
+// GetUTXO 返回指定公钥哈希对应的所有 UTXO（未花费交易输出）。
+// 参数 pubKeyHash 是公钥哈希（20 字节），用于匹配输出中的锁定脚本。
+// 返回值：
+//   - UTXOs 切片，包含所有匹配的 TxOutput。
+//   - error 表示数据库操作过程中的错误（如 bucket 不存在或读取失败）。
+func (u UTXOSet) GetUTXO(pubKeyHash []byte) ([]TxOutput, error) {
+	var UTXOs []TxOutput  // 存储匹配的输出结果
+	db := u.BlockChain.db // 获取区块链数据库实例
+
+	// 使用只读事务查询数据库
 	err := db.View(func(tx *bolt.Tx) error {
+		// 获取 UTXO 桶（存储所有未花费输出）
 		b := tx.Bucket([]byte(utxoBucket))
-		c := b.Cursor() // 创建游标，遍历桶中数据
-		// k为交易ID从十六进制字符串解码为字节   v为TxOutputs.Serialize
+		if b == nil {
+			// 桶不存在，视为空 UTXO 集
+			return nil
+		}
+
+		// 创建游标遍历桶中所有键值对
+		c := b.Cursor()
+		// 遍历每一个交易输出集
 		for k, v := c.First(); k != nil; k, v = c.Next() {
+			// 反序列化输出集（该交易的所有输出）
 			outs := DeserializeOutputs(v)
 
+			// 遍历该交易中的每个输出
 			for _, out := range outs.Outputs {
-				if out.IsLockedWithKey(pubKeyHash) { // 公钥匹配得到UTXO
+				// 检查当前输出是否被给定的公钥哈希锁定
+				if out.IsLockedWithKey(pubKeyHash) {
+					// 匹配成功，添加到结果集
 					UTXOs = append(UTXOs, out)
 				}
 			}
 		}
 
-		return nil
+		return nil // 无错误，事务成功
 	})
-	if err != nil {
-		log.Panic(err)
-	}
 
-	return UTXOs
+	// 返回结果和可能的错误（错误由调用方处理）
+	return UTXOs, err
 }
 
 // 获取UTXO桶中所有的交易索引和未花费的金额（未花费的输出，用于转账）
-func (u UTXOSet) GetUnSpendableOutputs(pubkeyHash []byte, amount uint64) (uint64, map[string][]int) {
+func (u UTXOSet) GetUnSpendableOutputs(pubkeyHash []byte, amount uint64) (uint64, map[string][]int, error) {
 	unspentOutputs := make(map[string][]int) // 未花费的输出
 	var accumulated uint64                   // 未花费的金额（余额）
 	db := u.BlockChain.db                    // 发送者的钱包数据库
 
 	err := db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(utxoBucket)) // 获取UTXO桶
-		c := b.Cursor()                    // 遍历桶
+		if b == nil {
+			return fmt.Errorf("UTXO bucket not found")
+		}
+		c := b.Cursor() // 遍历桶
 
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			txID := hex.EncodeToString(k) // 解密交易id
@@ -118,29 +132,23 @@ func (u UTXOSet) GetUnSpendableOutputs(pubkeyHash []byte, amount uint64) (uint64
 				}
 			}
 		}
-
 		return nil
 	})
-	if err != nil {
-		log.Panic(err)
-	}
-
-	return accumulated, unspentOutputs
+	return accumulated, unspentOutputs, err
 }
 
 // 签名
-func (bc *BlockChain) SignTransaction(tx *Transaction, privKey ecdsa.PrivateKey) {
-	prevTXs := make(map[string]Transaction) // 声明上一个交易
-
+func (bc *BlockChain) SignTransaction(tx *Transaction, privKey ecdsa.PrivateKey) error {
+	prevTXs := make(map[string]Transaction) // 声明一个切片用于存储前面所有的交易的id
+	// 遍历所有交易的输入，并按交易id查询交易，确保交易存在，并将之前所有交易id放入切片中
 	for _, vin := range tx.Vin {
-		prevTX, err := bc.FindTransaction(vin.Txid) // 查询上一个交易
+		prevTX, err := bc.FindTransaction(vin.Txid)
 		if err != nil {
-			log.Panic(err)
+			return fmt.Errorf("find previous tx: %w", err)
 		}
 		prevTXs[hex.EncodeToString(prevTX.ID)] = prevTX
 	}
-
-	tx.Sign(privKey, prevTXs)
+	return tx.Sign(privKey, prevTXs)
 }
 
 // 根据交易id查询交易
@@ -165,83 +173,113 @@ func (bc *BlockChain) FindTransaction(ID []byte) (Transaction, error) {
 }
 
 /*
-更新UTXO
-（分两部分，第一部分当前交易的输入里面存在上一个交易的输出并且未花费的金额需要重新更新，
-第二部分，只处理当前交易的输出）
+更新 UTXO 集合（基于新挖出的区块）
+	步骤一当前交易的输入里面存在上一个交易的输出并且未花费的金额需要重新更新
+	步骤二，只处理当前交易的输出
 */
-func (u UTXOSet) Update(block *Block) {
+// 返回值：error 表示更新过程中遇到的错误
+func (u UTXOSet) Update(block *Block) error {
 	db := u.BlockChain.db
 
 	err := db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(utxoBucket))
-		// 交易列表（新区块和转账交易）内部处理输入部分
-		for _, tx := range block.Transactions {
-			if tx.IsCoinbase() == false { // 如果不是Coinbase交易（Coinbase交易没有输入）
-				for _, vin := range tx.Vin { // 遍历当前交易的每个输入
-					updatedOuts := TxOutputs{}            // 创建一个空的输出集合，用于处理上一个交易的输出，未花费的输出
-					outsBytes := b.Get(vin.Txid)          // 根据输入交易id找到，上一个交易的输出
-					outs := DeserializeOutputs(outsBytes) // 反序列化输出
+		if b == nil {
+			return fmt.Errorf("UTXO bucket not found")
+		}
 
-					for outIdx, out := range outs.Outputs { // 遍历输出
-						// 上一个交易的输出和当前交易输入里的输出一致才会呗消费，否则未被消费放入未来的交易余额里
-						if uint64(outIdx) != vin.Vout {
-							updatedOuts.Outputs = append(updatedOuts.Outputs, out) // 未花费的交易要协会数据库
-						}
-					}
-					// 判断更新后的输出列表是否为空
-					if len(updatedOuts.Outputs) == 0 {
-						// 如果所有输出都花费了，删除整个交易条目
-						err := b.Delete(vin.Txid)
-						if err != nil {
-							log.Panic(err)
-						}
-					} else {
-						// 还有未花费的输出，更新数据库
-						err := b.Put(vin.Txid, updatedOuts.Serialize())
-						if err != nil {
-							log.Panic(err)
-						}
-					}
+		// 步骤1：处理区块中所有交易的输入，删除/更新被花费的输出
+		// 使用临时 map 记录每个交易 ID 的剩余输出（用于多个输入可能引用同一交易的情况）
+		pendingUpdates := make(map[string][]TxOutput)
 
+		for _, transaction := range block.Transactions {
+			if transaction.IsCoinbase() {
+				continue // Coinbase 交易没有输入，跳过
+			}
+			for _, vin := range transaction.Vin {
+				txID := hex.EncodeToString(vin.Txid)
+
+				// 从数据库获取该交易当前的 UTXO 集合
+				outsBytes := b.Get(vin.Txid)
+				if outsBytes == nil {
+					return fmt.Errorf("UTXO not found for tx %s", txID)
+				}
+				outs := DeserializeOutputs(outsBytes)
+				// 边界检查
+				if int(vin.Vout) >= len(outs.Outputs) {
+					return fmt.Errorf("Vout index %d out of range for tx %s", vin.Vout, txID)
+				}
+				// 构建该交易新的 UTXO 列表（移除被花费的输出）
+				var remainingOuts []TxOutput
+				for idx, out := range outs.Outputs {
+					if uint64(idx) != vin.Vout {
+						remainingOuts = append(remainingOuts, out)
+					}
+				}
+
+				// 合并到 pendingUpdates 中
+				if existing, ok := pendingUpdates[txID]; ok {
+					// 将当前剩余输出追加到已有列表中
+					pendingUpdates[txID] = append(existing, remainingOuts...)
+				} else {
+					pendingUpdates[txID] = remainingOuts
 				}
 			}
-			// 外部值处理输出部分，一旦为创世交易不需要输入所以这里只处理输出，输入有上面处理
-			newOutputs := TxOutputs{} // 新的交易输出声明
-			for _, out := range tx.Vout {
-				newOutputs.Outputs = append(newOutputs.Outputs, out)
-			}
-			// 将交易的输出存入数据库，以便下一次交易查询到
-			err := b.Put(tx.ID, newOutputs.Serialize())
+		}
+
+		// 将 pendingUpdates 中的更新写回数据库
+		for txIDHex, outputs := range pendingUpdates {
+			txIDBytes, err := hex.DecodeString(txIDHex)
 			if err != nil {
-				log.Panic(err)
+				return err
+			}
+			if len(outputs) == 0 {
+				// 所有输出都被花费，删除该交易条目
+				if err := b.Delete(txIDBytes); err != nil {
+					return err
+				}
+			} else {
+				// 更新该交易的 UTXO 条目
+				updatedOuts := TxOutputs{Outputs: outputs}
+				if err := b.Put(txIDBytes, updatedOuts.Serialize()); err != nil {
+					return err
+				}
+			}
+		}
+
+		// 步骤2：处理区块中所有交易的输出，将新产生的 UTXO 添加到数据库
+		for _, transaction := range block.Transactions {
+			// 构建该交易的输出列表（切片）
+			var newOutputs []TxOutput
+			for _, out := range transaction.Vout {
+				newOutputs = append(newOutputs, out)
+			}
+			// 包装为 TxOutputs 并写入数据库
+			outsWrapper := TxOutputs{Outputs: newOutputs}
+			if err := b.Put(transaction.ID, outsWrapper.Serialize()); err != nil {
+				return err
 			}
 		}
 
 		return nil
 	})
-	if err != nil {
-		log.Panic(err)
-	}
+
+	return err
 }
 
 // 交易数量
-func (u UTXOSet) CountTransactions() int {
+func (u UTXOSet) CountTransactions() (int, error) {
 	db := u.BlockChain.db
 	counter := 0
-
 	err := db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(utxoBucket))
+		if b == nil {
+			return nil // 空桶也认为计数0
+		}
 		c := b.Cursor()
-
 		for k, _ := c.First(); k != nil; k, _ = c.Next() {
 			counter++
 		}
-
 		return nil
 	})
-	if err != nil {
-		log.Panic(err)
-	}
-
-	return counter
+	return counter, err
 }

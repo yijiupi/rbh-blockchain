@@ -16,16 +16,24 @@ func handleAddr(request []byte) {
 	dec := gob.NewDecoder(&buff)        // 创建一个gob解码器，连接到缓冲区
 	err := dec.Decode(&payload)         // 将缓冲区中的二进制数据解码到payload变量中
 	if err != nil {                     // 如果解码失败（如数据格式不对），程序会panic并终止
-		log.Panic(err)
+		log.Printf("handleAddr decode error: %v", err)
+		return
 	}
 
+	knownNodesMutex.Lock()                               // 并非安全锁
 	knownNodes = append(knownNodes, payload.AddrList...) // 将解码得到的地址列表添加到全局的knownNodes列表中
+	knownNodesMutex.Unlock()
 	fmt.Printf("There are %d known nodes now!\n", len(knownNodes))
 	requestBlocks() // 向所有已知节点请求区块数据
 }
 
 // 这是在获得新节点地址后，主动开始同步区块链
 func requestBlocks() {
+	// 并非安全锁
+	knownNodesMutex.RLock()
+	nodes := make([]string, len(knownNodes))
+	copy(nodes, knownNodes)
+	knownNodesMutex.RUnlock()
 	for _, address := range knownNodes {
 		payload := gobEncode(getBlocks{nodeAddress})
 		request := append(commandToBytes("getblocks"), payload...)

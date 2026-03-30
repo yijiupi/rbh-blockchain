@@ -6,6 +6,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/gob"
 	"fmt"
 	"log"
 )
@@ -22,7 +24,10 @@ type Wallet struct {
 // 验证钱包地址
 func ValidateAddress(address string) bool {
 	// 版本字节+pubKey+校验和
-	pubKeyHash := Base58Decode([]byte(address))                       // 解密address得到pubKey
+	pubKeyHash, err := Base58Decode([]byte(address)) // 解密address得到pubKey
+	if err != nil {
+		return false
+	}
 	actualChecksum := pubKeyHash[len(pubKeyHash)-addressChecksumLen:] // 校验和：获取切片最后四位
 	version := pubKeyHash[0]                                          // 版本字节：获取切片第一位
 	pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-addressChecksumLen]   // 公钥：获取切片中间部分（上面的剩余部分）
@@ -89,4 +94,67 @@ func HashPubKey(pubKey []byte) []byte {
 	publicRIPEMD160 := RIPEMD160Hasher.Sum(nil)
 
 	return publicRIPEMD160
+}
+
+// Serialize 将钱包序列化为字节数组（用于存储）
+func (w *Wallet) Serialize() ([]byte, error) {
+	// 私钥序列化为 PKCS#8 格式
+	privKeyBytes, err := x509.MarshalPKCS8PrivateKey(&w.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	// 公钥序列化为 PKIX 格式
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(&w.PrivateKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	// 将两个字节数组编码为简单结构
+	type serializedWallet struct {
+		PrivKey []byte
+		PubKey  []byte
+	}
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(serializedWallet{privKeyBytes, pubKeyBytes}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// DeserializeWallet 从字节数组恢复钱包
+func DeserializeWallet(data []byte) (*Wallet, error) {
+	type serializedWallet struct {
+		PrivKey []byte
+		PubKey  []byte
+	}
+	var sw serializedWallet
+	dec := gob.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&sw); err != nil {
+		return nil, err
+	}
+	// 解析私钥
+	privKeyInterface, err := x509.ParsePKCS8PrivateKey(sw.PrivKey)
+	if err != nil {
+		return nil, err
+	}
+	privKey, ok := privKeyInterface.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("not an ECDSA private key")
+	}
+	// 公钥可选（可从私钥推导，但为了完整性可解析）
+	pubKeyInterface, err := x509.ParsePKIXPublicKey(sw.PubKey)
+	if err != nil {
+		// 如果公钥解析失败，从私钥中提取
+		pubKeyInterface = &privKey.PublicKey
+	}
+	pubKey, ok := pubKeyInterface.(*ecdsa.PublicKey)
+	if !ok {
+		pubKey = &privKey.PublicKey
+	}
+	// 将公钥转为字节数组（与原来 NewWallet 中的格式一致）
+	pubKeyBytes := append(pubKey.X.Bytes(), pubKey.Y.Bytes()...)
+	return &Wallet{
+		PrivateKey: *privKey,
+		PublicKey:  pubKeyBytes,
+	}, nil
 }

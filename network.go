@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
+	"time"
 )
 
 const protocol = "tcp"
@@ -16,6 +18,23 @@ var miningAddress string                    //挖矿奖励地址 - 挖出新块�
 var knownNodes = []string{"localhost:3000"} //已知节点列表 - 启动时已知的其他节点地址
 var blocksInTransit = [][]byte{}            //传输中的区块 - 正在从其他节点下载的区块哈希列表
 var memPool = make(map[string]Transaction)  //内存池 - 存储尚未被打包进区块的交易
+var (
+	// 并发安全锁（互斥锁）
+	knownNodesMutex      sync.RWMutex
+	memPoolMutex         sync.RWMutex
+	blocksInTransitMutex sync.RWMutex
+	// 已广播交易的去重集合
+	broadcastedTxs      = make(map[string]bool)
+	broadcastedTxsMutex sync.RWMutex
+)
+var (
+	// 待下载区块队列（避免重复）
+	blocksToDownload  = make(map[string]bool)      // key = 区块哈希字符串
+	downloadingBlocks = make(map[string]time.Time) // 正在下载的区块及请求时间
+	downloadRetries   = make(map[string]int)       // 重试次数
+	downloadMutex     sync.RWMutex
+	downloaderStarted bool
+)
 
 // 地址消息 - 用于交换节点节点间互相告知已知的其他节点地址
 type addr struct {
@@ -94,23 +113,48 @@ func bytesToCommand(bytes []byte) string {
 */
 // 开启服务器（节点连接服务器）
 func StartServer(nodeID, minerAddress string) {
-	nodeAddress = fmt.Sprintf("localhost:%s", nodeID) // 服务器节点localshot:3000
+	nodeAddress = fmt.Sprintf("localhost:%s", nodeID) // 当前服务器节点
 	miningAddress = minerAddress                      // 奖励矿工地址
-	ln, err := net.Listen(protocol, nodeAddress)      // 服务端监听传入连接localshot:3000
+
+	// 1. 初始化区块链（若不存在则创建空链）
+	bc, err := initBlockchain(nodeID)
 	if err != nil {
-		log.Panic(err)
+		log.Fatalf("Failed to initialize blockchain: %v", err)
 	}
-	defer ln.Close()                  // 执行完毕记得关闭监听
-	bc := GetBlockchain(nodeID)       // 创建当前节点的数据库，得到当前区块hash和db
-	if nodeAddress != knownNodes[0] { // 检查自己是不是那个种子节点
-		sendVersion(knownNodes[0], bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
+	defer func() {
+		if bc.db != nil {
+			bc.db.Close()
+		}
+	}()
+
+	// 2. 启动下载管理器（仅一次，且仅在数据库有效时）// 使用 atomic bool 或普通 bool + 互斥锁确保只启动一次
+	if !downloaderStarted && bc.db != nil {
+		go downloadManager() // 启动后台 goroutine，负责管理区块的并发下载、超时重试等
+		downloaderStarted = true
+		log.Println("Block download manager started")
 	}
 
-	// 服务端等待其它节点来连接
+	// 3. 启动网络监听
+	ln, err := net.Listen(protocol, nodeAddress)
+	if err != nil {
+		log.Fatalf("Listen error: %v", err)
+	}
+	defer ln.Close()
+
+	// 4. 如果不是种子节点，主动向种子节点发送版本信息
+	if nodeAddress != knownNodes[0] {
+		knownNodesMutex.RLock()
+		seed := knownNodes[0] // 并发安全锁，安全读取种子节点
+		knownNodesMutex.RUnlock()
+		sendVersion(seed, bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
+	}
+
+	// 5. 接受连接
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Panic(err)
+			log.Printf("Accept error: %v", err)
+			continue
 		}
 		go handleConnection(conn, bc) // 监测到其它节点连接，处理连接同步数据到db
 	}
@@ -122,6 +166,8 @@ func sendData(addr string, data []byte) {
 	if err != nil {
 		fmt.Printf("%s is not available\n", addr)
 		var updatedNodes []string
+		// 并非安全锁
+		knownNodesMutex.Lock()
 		// 若报错说明addr是个失败节点，需要删除
 		for _, node := range knownNodes {
 			if node != addr {
@@ -129,6 +175,8 @@ func sendData(addr string, data []byte) {
 			}
 		}
 		knownNodes = updatedNodes // 排除掉失败节点的新数组，赋值给已知节点列表
+		// 并非安全锁
+		knownNodesMutex.Unlock()
 		return
 	}
 	defer conn.Close()
@@ -136,7 +184,9 @@ func sendData(addr string, data []byte) {
 	// conn 是网络连接（实现了 io.Writer 接口）
 	_, err = io.Copy(conn, bytes.NewReader(data)) // 它将内存中的数据通过 TCP 连接发送出去，让服务端接收到
 	if err != nil {
-		log.Panic(err)
+		log.Printf("Failed to send data to %s: %v", addr, err)
+		// 不 panic，仅记录日志，发送失败由调用方决定是否重试（当前忽略）
+		return
 	}
 }
 
@@ -146,6 +196,18 @@ func sendTx(addr string, tnx *Transaction) {
 	payload := gobEncode(data)
 	request := append(commandToBytes("tx"), payload...)
 
+	sendData(addr, request)
+}
+
+// sendGetData 发送 getdata 消息，请求特定数据（区块或交易）
+func sendGetData(addr, kind string, id []byte) {
+	payload := getData{
+		AddrFrom: nodeAddress,
+		Type:     kind,
+		ID:       id,
+	}
+	data := gobEncode(payload)
+	request := append(commandToBytes("getdata"), data...)
 	sendData(addr, request)
 }
 

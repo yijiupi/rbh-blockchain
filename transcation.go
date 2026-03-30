@@ -6,9 +6,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/gob"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 )
@@ -20,29 +20,78 @@ type Transaction struct {
 	Vout []TxOutput // 当前交易的输出
 }
 
-// 把交易内容整体做hash
-func (tx *Transaction) Hash() []byte {
-	var hash [32]byte
-
-	txCopy := *tx
-	//txCopy.ID = []byte{}
-
-	hash = sha256.Sum256(txCopy.Serialize())
-
-	return hash[:]
+// Serialize 序列化完整交易（包含 ID）
+func (tx Transaction) Serialize() []byte {
+	buf := new(bytes.Buffer)
+	// ID 固定 32 字节
+	if len(tx.ID) != 32 {
+		// 如果 ID 长度不对，补零（通常不会发生）
+		tmp := make([]byte, 32)
+		copy(tmp, tx.ID)
+		buf.Write(tmp)
+	} else {
+		buf.Write(tx.ID)
+	}
+	// 输入数量
+	WriteVarInt(buf, uint64(len(tx.Vin)))
+	for _, in := range tx.Vin {
+		_ = in.Serialize(buf)
+	}
+	// 输出数量
+	WriteVarInt(buf, uint64(len(tx.Vout)))
+	for _, out := range tx.Vout {
+		_ = out.Serialize(buf)
+	}
+	return buf.Bytes()
 }
 
-// 把交易内容整体序列化
-func (tx Transaction) Serialize() []byte {
-	var encoded bytes.Buffer
-
-	enc := gob.NewEncoder(&encoded)
-	err := enc.Encode(tx)
-	if err != nil {
-		log.Panic(err)
+// DeserializeTransaction 从字节流反序列化交易
+func DeserializeTransaction(data []byte) (*Transaction, error) {
+	r := bytes.NewReader(data)
+	id := make([]byte, 32)
+	if _, err := io.ReadFull(r, id); err != nil {
+		return nil, err
 	}
+	vinCount, err := ReadVarInt(r)
+	if err != nil {
+		return nil, err
+	}
+	vin := make([]TxInput, 0, vinCount)
+	for i := uint64(0); i < vinCount; i++ {
+		in, err := DeserializeTxInput(r)
+		if err != nil {
+			return nil, err
+		}
+		vin = append(vin, *in)
+	}
+	voutCount, err := ReadVarInt(r)
+	if err != nil {
+		return nil, err
+	}
+	vout := make([]TxOutput, 0, voutCount)
+	for i := uint64(0); i < voutCount; i++ {
+		out, err := DeserializeTxOutput(r)
+		if err != nil {
+			return nil, err
+		}
+		vout = append(vout, *out)
+	}
+	return &Transaction{
+		ID:   id,
+		Vin:  vin,
+		Vout: vout,
+	}, nil
+}
 
-	return encoded.Bytes()
+// Hash 计算交易 ID（用于签名前）—— 必须序列化时不包含 ID 字段
+func (tx *Transaction) Hash() []byte {
+	// 复制交易，清空 ID
+	txCopy := *tx
+	txCopy.ID = make([]byte, 32) // 32 字节零值
+	// 序列化副本
+	data := txCopy.Serialize()
+	hash := sha256.Sum256(data)
+	return hash[:]
 }
 
 // 判断一个交易是否是创币交易
@@ -81,9 +130,11 @@ func NewUTXOTransaction(wallet *Wallet, to string, amount uint64, UTXOSet *UTXOS
 	var inputs []TxInput // 组装TxInput列表，这里包含所有准备消费Vout
 	var outputs []TxOutput
 
-	pubKeyHash := HashPubKey(wallet.PublicKey)                                 // 发送者公钥
-	balance, validOutputs := UTXOSet.GetUnSpendableOutputs(pubKeyHash, amount) // 收集发送者UTXO的balance直至满足amount
-
+	pubKeyHash := HashPubKey(wallet.PublicKey)                                      // 发送者公钥
+	balance, validOutputs, err := UTXOSet.GetUnSpendableOutputs(pubKeyHash, amount) // 收集发送者UTXO的balance直至满足amount
+	if err != nil {
+		log.Panic(err)
+	}
 	if balance < amount {
 		log.Panic("ERROR: Not enough funds") // 余额不足
 	}
@@ -107,43 +158,54 @@ func NewUTXOTransaction(wallet *Wallet, to string, amount uint64, UTXOSet *UTXOS
 		outputs = append(outputs, *NewTxOutput(balance-amount, from)) // 为了将from的string类型转为公钥的byte类型
 	}
 
-	tx := Transaction{nil, inputs, outputs}                    // 完成交易结构体组装
-	tx.ID = tx.Hash()                                          // 生成交易的id
-	UTXOSet.BlockChain.SignTransaction(&tx, wallet.PrivateKey) // 交易和私钥去签名
+	tx := Transaction{nil, inputs, outputs}                               // 完成交易结构体组装
+	tx.ID = tx.Hash()                                                     // 生成交易的id
+	signerr := UTXOSet.BlockChain.SignTransaction(&tx, wallet.PrivateKey) // 交易和私钥去签名
+	if signerr != nil {
+		log.Printf("Sign transaction error: %v", err)
+		// 可根据需要返回 nil 或 panic直接崩溃，这里我们只打印日志
+	}
 
 	return &tx //交易数据已经完全组装完成内容无空
 }
 
 // 签名（当前交易里，我的私钥，我上一次的交易）
-func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transaction) {
+func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transaction) error {
 	if tx.IsCoinbase() { // 验证时否时coinbase交易
-		return
+		return nil
 	}
-	// 当前交易的vin.Txid是上一个交易prevTXs的key
+	// 验证当前交易的所有输入所引用的前序交易是否都存在
 	for _, vin := range tx.Vin {
-		if prevTXs[hex.EncodeToString(vin.Txid)].ID == nil { // 得到上一个交易是否存在
-			log.Panic("ERROR: Previous transaction is not correct")
+		if prevTXs[hex.EncodeToString(vin.Txid)].ID == nil {
+			return fmt.Errorf("previous transaction not found")
 		}
 	}
-
-	txCopy := tx.TrimmedCopy() // 当前交易复制一份（为了签名，input里签名和公钥必须是nil才好签名）
-	// 循环当前交易副本的input
+	// 当前交易复制一份（为了签名，input里签名和公钥必须是nil才好签名）
+	txCopy := tx.TrimmedCopy()
 	for inID, vin := range txCopy.Vin {
-		prevTx := prevTXs[hex.EncodeToString(vin.Txid)] // 当前交易成为上一个交易的
+		// 获取上一个交易的输出
+		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
+		// 边界检查（正常时uint32，我用的uint64所以需要检查）
+		if int(vin.Vout) >= len(prevTx.Vout) {
+			return fmt.Errorf("vout index out of range")
+		}
+		// 复制交易设置空签名和公钥
 		txCopy.Vin[inID].Signature = nil
 		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
-
-		dataToSign := fmt.Sprintf("%x\n", txCopy)
+		// 交易进行hash用于签名
+		dataToSign := txCopy.Hash()
 		// 椭圆曲线签名的核心逻辑
-		r, s, err := ecdsa.Sign(rand.Reader, &privKey, []byte(dataToSign)) // 私钥和交易进行签名
+		r, s, err := ecdsa.Sign(rand.Reader, &privKey, dataToSign)
 		if err != nil {
-			log.Panic(err)
+			return fmt.Errorf("ecdsa sign: %w", err)
 		}
+		// 签名成功
 		signature := append(r.Bytes(), s.Bytes()...)
-
-		tx.Vin[inID].Signature = signature // 得到签名给tx赋值，tx最终所有参数都组装完成
+		// 签名成功，赋值给交易，为了安全把副本制空
+		tx.Vin[inID].Signature = signature
 		txCopy.Vin[inID].PubKey = nil
 	}
+	return nil
 }
 
 // 复制当前的交易
@@ -159,7 +221,8 @@ func (tx *Transaction) TrimmedCopy() Transaction {
 		outputs = append(outputs, TxOutput{vout.Value, vout.PubKeyHash})
 	}
 
-	txCopy := Transaction{tx.ID, inputs, outputs}
+	// 清空 ID，因为签名时不应依赖自身哈希
+	txCopy := Transaction{nil, inputs, outputs}
 
 	return txCopy
 }
@@ -181,6 +244,10 @@ func (tx *Transaction) Verify(prevTXs map[string]Transaction) bool {
 
 	for inID, vin := range tx.Vin {
 		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
+		// 边界检查
+		if int(vin.Vout) >= len(prevTx.Vout) {
+			log.Panic("ERROR: Vout index out of range")
+		}
 		txCopy.Vin[inID].Signature = nil
 		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
 
@@ -196,10 +263,10 @@ func (tx *Transaction) Verify(prevTXs map[string]Transaction) bool {
 		x.SetBytes(vin.PubKey[:(keyLen / 2)])
 		y.SetBytes(vin.PubKey[(keyLen / 2):])
 
-		dataToVerify := fmt.Sprintf("%x\n", txCopy)
+		dataToVerify := txCopy.Hash() // 使用交易副本的哈希
 
 		rawPubKey := ecdsa.PublicKey{Curve: curve, X: &x, Y: &y}
-		if ecdsa.Verify(&rawPubKey, []byte(dataToVerify), &r, &s) == false {
+		if ecdsa.Verify(&rawPubKey, dataToVerify, &r, &s) == false {
 			return false
 		}
 		txCopy.Vin[inID].PubKey = nil

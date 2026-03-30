@@ -15,10 +15,15 @@ func handleVersion(request []byte, bc *BlockChain) {
 	dec := gob.NewDecoder(&buff)        // gob 解码器（Go的二进制序列化格式）
 	err := dec.Decode(&payload)         // 将缓冲区数据解码到 payload 结构体中
 	if err != nil {
-		log.Panic(err)
+		log.Printf("handleVersion decode error: %v", err)
+		return
 	}
 
-	myBestHeight := bc.GetBestHeight()        // 获取本地区块链的最新高度
+	myBestHeight, err := bc.GetBestHeight() // 获取本地区块链的最新高度
+	if err != nil {
+		log.Printf("GetBestHeight error: %v", err)
+		return
+	}
 	foreignerBestHeight := payload.BestHeight // 获取对方区块链的高度
 
 	if myBestHeight < foreignerBestHeight { // 比较高度对方最长合法链
@@ -30,11 +35,21 @@ func handleVersion(request []byte, bc *BlockChain) {
 	if !nodeIsKnown(payload.AddrFrom) { // 检查发送者是否已在已知节点列表中
 		knownNodes = append(knownNodes, payload.AddrFrom) // 不在则添加
 	}
+	// 检查并添加节点
+	if !nodeIsKnown(payload.AddrFrom) {
+		knownNodesMutex.Lock()
+		knownNodes = append(knownNodes, payload.AddrFrom)
+		knownNodesMutex.Unlock()
+	}
 }
 
 // 组装版本信息，并在已知列表中连接种子节点
 func sendVersion(addr string, bc *BlockChain) {
-	bestHeight := bc.GetBestHeight()                                    // 新区块链的高度
+	bestHeight, err := bc.GetBestHeight() // 新区块链的高度
+	if err != nil {
+		log.Printf("sendVersion GetBestHeight error: %v", err)
+		return
+	}
 	payload := gobEncode(verzion{nodeVersion, bestHeight, nodeAddress}) // 新编码（新版本，新区块，新节点地址 ）
 	request := append(commandToBytes("version"), payload...)            // 带版本的新编码
 	sendData(addr, request)                                             // 连接种子节点
@@ -42,10 +57,14 @@ func sendVersion(addr string, bc *BlockChain) {
 
 func sendGetBlocks(address string) {
 	payload := gobEncode(getBlocks{nodeAddress})               // 编码请求数据
-	request := append(commandToBytes("getBlocks"), payload...) // 拼接命令+数据
+	request := append(commandToBytes("getblocks"), payload...) // 拼接命令+数据
 	sendData(address, request)                                 // 发送请求
 }
 func nodeIsKnown(addr string) bool {
+	// 加入并非安全锁
+	knownNodesMutex.RLock()
+	defer knownNodesMutex.RUnlock()
+
 	for _, node := range knownNodes { // 遍历已知节点列表
 		if node == addr { // 找到匹配
 			return true
