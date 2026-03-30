@@ -6,9 +6,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/gob"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 )
@@ -20,29 +20,78 @@ type Transaction struct {
 	Vout []TxOutput // 当前交易的输出
 }
 
-// 把交易内容整体做hash
-func (tx *Transaction) Hash() []byte {
-	var hash [32]byte
-
-	txCopy := *tx
-	txCopy.ID = []byte{} // 关键：清空 ID，因为 ID 是待计算的哈希值。如果序列化时包含 ID，而 ID 又是对当前数据的哈希，就会形成循环依赖。
-
-	hash = sha256.Sum256(txCopy.Serialize())
-
-	return hash[:]
+// Serialize 序列化完整交易（包含 ID）
+func (tx Transaction) Serialize() []byte {
+	buf := new(bytes.Buffer)
+	// ID 固定 32 字节
+	if len(tx.ID) != 32 {
+		// 如果 ID 长度不对，补零（通常不会发生）
+		tmp := make([]byte, 32)
+		copy(tmp, tx.ID)
+		buf.Write(tmp)
+	} else {
+		buf.Write(tx.ID)
+	}
+	// 输入数量
+	WriteVarInt(buf, uint64(len(tx.Vin)))
+	for _, in := range tx.Vin {
+		_ = in.Serialize(buf)
+	}
+	// 输出数量
+	WriteVarInt(buf, uint64(len(tx.Vout)))
+	for _, out := range tx.Vout {
+		_ = out.Serialize(buf)
+	}
+	return buf.Bytes()
 }
 
-// 把交易内容整体序列化
-func (tx Transaction) Serialize() []byte {
-	var encoded bytes.Buffer
-
-	enc := gob.NewEncoder(&encoded)
-	err := enc.Encode(tx)
-	if err != nil {
-		log.Panic(err)
+// DeserializeTransaction 从字节流反序列化交易
+func DeserializeTransaction(data []byte) (*Transaction, error) {
+	r := bytes.NewReader(data)
+	id := make([]byte, 32)
+	if _, err := io.ReadFull(r, id); err != nil {
+		return nil, err
 	}
+	vinCount, err := ReadVarInt(r)
+	if err != nil {
+		return nil, err
+	}
+	vin := make([]TxInput, 0, vinCount)
+	for i := uint64(0); i < vinCount; i++ {
+		in, err := DeserializeTxInput(r)
+		if err != nil {
+			return nil, err
+		}
+		vin = append(vin, *in)
+	}
+	voutCount, err := ReadVarInt(r)
+	if err != nil {
+		return nil, err
+	}
+	vout := make([]TxOutput, 0, voutCount)
+	for i := uint64(0); i < voutCount; i++ {
+		out, err := DeserializeTxOutput(r)
+		if err != nil {
+			return nil, err
+		}
+		vout = append(vout, *out)
+	}
+	return &Transaction{
+		ID:   id,
+		Vin:  vin,
+		Vout: vout,
+	}, nil
+}
 
-	return encoded.Bytes()
+// Hash 计算交易 ID（用于签名前）—— 必须序列化时不包含 ID 字段
+func (tx *Transaction) Hash() []byte {
+	// 复制交易，清空 ID
+	txCopy := *tx
+	txCopy.ID = make([]byte, 32) // 32 字节零值
+	// 序列化副本
+	data := txCopy.Serialize()
+	hash := sha256.Sum256(data)
+	return hash[:]
 }
 
 // 判断一个交易是否是创币交易

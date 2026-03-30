@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,12 @@ import (
 const dbFile = "blockchain_%s.db"
 const blocksBucket = "blocks"
 const genesisCoinbaseData = ""
+
+var (
+	ErrBlockchainNotExist = fmt.Errorf("blockchain database not found")
+	ErrBucketNotFound     = fmt.Errorf("blocks bucket not found")
+	ErrTipNotFound        = fmt.Errorf("tip not found")
+)
 
 // 区块链
 type BlockChain struct {
@@ -48,7 +55,7 @@ func (i *BlockchainIterator) Next() *Block {
 func GetBlockchain(nodeID string) (*BlockChain, error) {
 	dbFile := fmt.Sprintf(dbFile, nodeID) // blockchain_modeIDxxxx.db组装字符串
 	if !dbExists(dbFile) {
-		return nil, fmt.Errorf("区块链节点文件不存在，可以尝试创建一个")
+		return nil, ErrBlockchainNotExist
 	}
 	var tip []byte
 	db, err := bolt.Open(dbFile, 0600, nil) // 打开数据库文件blockchain_3000.db得到数据库db
@@ -78,25 +85,29 @@ func dbExists(dbFile string) bool {
 
 // 获取区块高度
 func (bc *BlockChain) GetBestHeight() (uint64, error) {
-	var lastBlock Block
-
-	err := bc.db.View(func(tx *bolt.Tx) error { // 数据库中查看
+	var lastHeight uint64 = 0
+	err := bc.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(blocksBucket)) // 从当前事务中获取名为 'blocks' 的 bucket
-		lastHash := b.Get([]byte("l"))       // 从 bucket 中获取键为 'l' 的值，最后一个区块的hash
+		if b == nil {
+			return ErrBucketNotFound
+		}
+		lastHash := b.Get([]byte("l")) // 从 bucket 中获取键为 'l' 的值，最后一个区块的hash
 		if lastHash == nil {
-			return fmt.Errorf("no block found")
+			// 没有区块，高度保持为 0
+			return nil
 		}
 		blockData := b.Get(lastHash) // 通过hash获取到区块的数据的二进制
 		if blockData == nil {
 			return fmt.Errorf("block data missing")
 		}
-		lastBlock = *DeserializeBlock(blockData) // 反序列化得到区块数据
+		block := DeserializeBlock(blockData) // 反序列化得到区块数据
+		lastHeight = block.Height
 		return nil
 	})
 	if err != nil {
 		return 0, err
 	}
-	return lastBlock.Height, nil
+	return lastHeight, nil
 }
 
 // 创建一个新区块链
@@ -137,6 +148,46 @@ func CreateBlockchain(address, nodeID string) (*BlockChain, error) {
 
 	bc := BlockChain{genesis.Hash, db} // 创建区块链，传入区块hash和数据库指针
 	return &bc, nil
+}
+
+// CreateEmptyBlockchain 创建空的区块链数据库（无区块）
+func CreateEmptyBlockchain(nodeID string) (*BlockChain, error) {
+	dbFile := fmt.Sprintf(dbFile, nodeID)
+	if dbExists(dbFile) {
+		return nil, fmt.Errorf("database already exists")
+	}
+	db, err := bolt.Open(dbFile, 0600, nil)
+	if err != nil {
+		return nil, fmt.Errorf("open db: %w", err)
+	}
+	err = db.Update(func(tx *bolt.Tx) error {
+		// 创建 blocks 桶
+		if _, err := tx.CreateBucketIfNotExists([]byte(blocksBucket)); err != nil {
+			return err
+		}
+		// 创建 chainstate 桶（UTXO）
+		if _, err := tx.CreateBucketIfNotExists([]byte(utxoBucket)); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create buckets: %w", err)
+	}
+	return &BlockChain{newBlockHash: nil, db: db}, nil
+}
+
+// initBlockchain 初始化区块链（若不存在则创建空链）
+func initBlockchain(nodeID string) (*BlockChain, error) {
+	bc, err := GetBlockchain(nodeID)
+	if err != nil {
+		if errors.Is(err, ErrBlockchainNotExist) {
+			return CreateEmptyBlockchain(nodeID)
+		}
+		return nil, err
+	}
+	return bc, nil
 }
 
 // 创世区块交易

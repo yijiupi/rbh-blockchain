@@ -71,8 +71,8 @@ func (u UTXOSet) GetUTXO(pubKeyHash []byte) ([]TxOutput, error) {
 		// 获取 UTXO 桶（存储所有未花费输出）
 		b := tx.Bucket([]byte(utxoBucket))
 		if b == nil {
-			// 桶不存在，返回明确的错误信息
-			return fmt.Errorf("UTXO bucket not found")
+			// 桶不存在，视为空 UTXO 集
+			return nil
 		}
 
 		// 创建游标遍历桶中所有键值对

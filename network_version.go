@@ -57,7 +57,7 @@ func sendVersion(addr string, bc *BlockChain) {
 
 func sendGetBlocks(address string) {
 	payload := gobEncode(getBlocks{nodeAddress})               // 编码请求数据
-	request := append(commandToBytes("getBlocks"), payload...) // 拼接命令+数据
+	request := append(commandToBytes("getblocks"), payload...) // 拼接命令+数据
 	sendData(address, request)                                 // 发送请求
 }
 func nodeIsKnown(addr string) bool {

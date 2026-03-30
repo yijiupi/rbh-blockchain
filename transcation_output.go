@@ -2,7 +2,8 @@ package main
 
 import (
 	"bytes"
-	"encoding/gob"
+	"encoding/binary"
+	"io"
 	"log"
 )
 
@@ -13,6 +14,60 @@ type TxOutput struct {
 }
 type TxOutputs struct {
 	Outputs []TxOutput
+}
+
+// Serialize 将 TxOutput 写入字节缓冲区
+func (out *TxOutput) Serialize(buf *bytes.Buffer) error {
+	// Value 8 字节小端
+	if err := binary.Write(buf, binary.LittleEndian, out.Value); err != nil {
+		return err
+	}
+	// PubKeyHash 变长
+	WriteVarBytes(buf, out.PubKeyHash)
+	return nil
+}
+
+// DeserializeTxOutput 从 io.Reader 读取 TxOutput
+func DeserializeTxOutput(r io.Reader) (*TxOutput, error) {
+	var value uint64
+	if err := binary.Read(r, binary.LittleEndian, &value); err != nil {
+		return nil, err
+	}
+	pubKeyHash, err := ReadVarBytes(r)
+	if err != nil {
+		return nil, err
+	}
+	return &TxOutput{
+		Value:      value,
+		PubKeyHash: pubKeyHash,
+	}, nil
+}
+
+// 修改 TxOutputs 的序列化/反序列化
+func (outs TxOutputs) Serialize() []byte {
+	buf := new(bytes.Buffer)
+	WriteVarInt(buf, uint64(len(outs.Outputs)))
+	for _, out := range outs.Outputs {
+		_ = out.Serialize(buf)
+	}
+	return buf.Bytes()
+}
+
+func DeserializeOutputs(data []byte) TxOutputs {
+	r := bytes.NewReader(data)
+	count, err := ReadVarInt(r)
+	if err != nil {
+		log.Panic(err)
+	}
+	outputs := make([]TxOutput, 0, count)
+	for i := uint64(0); i < count; i++ {
+		out, err := DeserializeTxOutput(r)
+		if err != nil {
+			log.Panic(err)
+		}
+		outputs = append(outputs, *out)
+	}
+	return TxOutputs{Outputs: outputs}
 }
 
 func NewTxOutput(value uint64, address string) *TxOutput {
@@ -29,32 +84,6 @@ func (out *TxOutput) Lock(address []byte) {
 	}
 	pubKeyHash = pubKeyHash[1 : len(pubKeyHash)-4]
 	out.PubKeyHash = pubKeyHash
-}
-
-// 序列化
-func (outs TxOutputs) Serialize() []byte {
-	var buff bytes.Buffer
-
-	enc := gob.NewEncoder(&buff)
-	err := enc.Encode(outs)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	return buff.Bytes()
-}
-
-// 反序列化
-func DeserializeOutputs(data []byte) TxOutputs {
-	var outputs TxOutputs
-
-	dec := gob.NewDecoder(bytes.NewReader(data))
-	err := dec.Decode(&outputs)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	return outputs
 }
 
 // 检查给定的公钥哈希是否与输出中存储的公钥哈希匹配

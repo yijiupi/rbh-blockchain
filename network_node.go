@@ -1,13 +1,14 @@
 package main
 
 import (
+	"encoding/hex"
 	"log"
 	"math/rand"
 	"time"
 )
 
 // 下载管理器实现
-func downloadManager(bc *BlockChain) {
+func downloadManager() {
 	ticker := time.NewTicker(10 * time.Second) // 定期检查
 	for range ticker.C {
 		downloadMutex.Lock()
@@ -18,30 +19,39 @@ func downloadManager(bc *BlockChain) {
 				// 超时，重试
 				retries := downloadRetries[hash] + 1
 				if retries >= 3 {
-					// 放弃该区块，从待下载中删除
-					delete(blocksToDownload, hash)
+					delete(blocksToDownload, hash) // 放弃该区块，从待下载中删除
 					delete(downloadingBlocks, hash)
 					delete(downloadRetries, hash)
-					log.Printf("Failed to download block %s after 3 retries", hash)
 				} else {
-					// 重新请求
-					downloadRetries[hash] = retries
-					// 选择节点
-					node := selectNodeForBlock()
-					sendGetData(node, "block", []byte(hash))
+					downloadRetries[hash] = retries // 重新请求
+					node := selectNodeForBlock()    // 选择节点
+					originalHash, err := hex.DecodeString(hash)
+					if err != nil {
+						log.Printf("Invalid hash string: %s", hash)
+						delete(blocksToDownload, hash)
+						delete(downloadingBlocks, hash)
+						continue
+					}
+					sendGetData(node, "block", originalHash)
 					downloadingBlocks[hash] = now // 更新时间
 				}
 			}
 		}
 
 		// 2. 从待下载队列中取区块开始下载
-		for hash := range blocksToDownload {
-			if _, downloading := downloadingBlocks[hash]; !downloading {
+		for hashStr := range blocksToDownload {
+			if _, downloading := downloadingBlocks[hashStr]; !downloading {
 				// 尚未下载，选择节点发送请求
 				node := selectNodeForBlock()
-				sendGetData(node, "block", []byte(hash))
-				downloadingBlocks[hash] = time.Now()
-				delete(blocksToDownload, hash)
+				originalHash, err := hex.DecodeString(hashStr)
+				if err != nil {
+					log.Printf("Invalid hash string: %s", hashStr)
+					delete(blocksToDownload, hashStr)
+					continue
+				}
+				sendGetData(node, "block", originalHash)
+				downloadingBlocks[hashStr] = time.Now()
+				delete(blocksToDownload, hashStr)
 				// 同时将该哈希移出待下载队列，避免重复
 			}
 		}

@@ -31,8 +31,10 @@ type ProofOfWork struct {
 
 // NewProofOfWork 创建工作量证明，缓存预计算不变部分
 func NewProofOfWork(b *Block) *ProofOfWork {
+	fmt.Printf("DEBUG: targetBits = %d\n", targetBits) // 添加这行
 	target := big.NewInt(1)
 	target.Lsh(target, uint(256-targetBits))
+	fmt.Printf("DEBUG: target = %x\n", target.Bytes()) // 添加这行
 
 	// 预计算不变部分：PrevBlockHash + HashTransactions + Timestamp + targetBits
 	prefix := bytes.Join(
@@ -44,7 +46,9 @@ func NewProofOfWork(b *Block) *ProofOfWork {
 		},
 		[]byte{},
 	)
-
+	hashTx := b.HashTransactions()
+	fmt.Printf("HashTransactions (full): %x\n", hashTx)
+	fmt.Printf("NewProofOfWork: preparedPrefix (full): %x\n", prefix) // 打印完整
 	pow := &ProofOfWork{b, target, prefix}
 	return pow
 }
@@ -55,24 +59,27 @@ func (pow *ProofOfWork) Run() (uint64, []byte) {
 	var hash [32]byte
 	var nonce uint64 = 0
 
+	fmt.Printf("Run: targetBits=%d, target=%x\n", targetBits, pow.target.Bytes())
+	fmt.Printf("preparedPrefix (first 16 bytes): %x\n", pow.preparedPrefix[:min(16, len(pow.preparedPrefix))])
+
 	fmt.Printf("Mining a new block")
 	for nonce < maxNonce {
 		data := pow.prepareData(nonce) // 组合当前 nonce 与区块数据
-		hash = sha256.Sum256(data)     // hash 是 [32]byte 类型（数组）
+		hash = sha256.Sum256(data)     // 计算哈希
 		if nonce%100000 == 0 {
-			// 每 10 万次打印一次当前哈希（进度提示，避免程序看起来像卡死了一样）在大多数机器上大约每几秒到几十秒打印一次
-			fmt.Printf("\r%x", hash) //
+			// 每 10 万次打印一次当前哈希（进度提示）
+			fmt.Printf("\r%x", hash)
 		}
-		hashInt.SetBytes(hash[:]) // 传入hash切片类型，转为大数
-		// 返回 -1 表示 hashInt < pow.target | 0 表示相等 | 1 表示 hashInt > pow.target
+		hashInt.SetBytes(hash[:]) // 转为大数
+		// 比较：hashInt < target 时有效，返回 -1 表示 hashInt < pow.target | 0 表示相等 | 1 表示 hashInt > pow.target
 		if hashInt.Cmp(pow.target) == -1 {
-			break // 找到有效 nonce，挖矿成功
-		} else {
-			nonce++
+			fmt.Printf("\nFound valid nonce: %d, hash=%x\n", nonce, hash)
+			fmt.Printf("Run: data (full): %x\n", data) // 打印完整 data
+			break                                      // 找到有效 nonce，挖矿成功
 		}
+		nonce++
 	}
 	fmt.Print("\n\n")
-
 	return nonce, hash[:]
 }
 
@@ -101,12 +108,25 @@ func IntToHex(num int64) []byte {
 // Validate 验证区块 PoW 是否正确
 func (pow *ProofOfWork) Validate() bool {
 	var hashInt big.Int
-
+	fmt.Printf("Validate: targetBits=%d, target=%x\n", targetBits, pow.target.Bytes())
+	fmt.Printf("Validate: block.Nonce=%d, block.Hash=%x\n", pow.block.Nonce, pow.block.Hash)
+	fmt.Printf("Validate: PrevBlockHash=%x\n", pow.block.PrevBlockHash)
+	fmt.Printf("Validate: Timestamp=%d\n", pow.block.Timestamp)
+	fmt.Printf("Validate: number of txs=%d\n", len(pow.block.Transactions))
+	for i, tx := range pow.block.Transactions {
+		fmt.Printf("  tx[%d] ID=%x\n", i, tx.ID)
+		// 可选：打印交易的序列化前几个字节
+		// ser := tx.Serialize()
+		// fmt.Printf("    serialize first 16: %x\n", ser[:min(16, len(ser))])
+	}
+	fmt.Printf("Validate: preparedPrefix (full): %x\n", pow.preparedPrefix)
 	data := pow.prepareData(pow.block.Nonce)
+	fmt.Printf("Validate: data (full): %x\n", data)
 	hash := sha256.Sum256(data)
+	fmt.Printf("Validate: computed hash=%x\n", hash)
 	hashInt.SetBytes(hash[:])
-
 	isValid := hashInt.Cmp(pow.target) == -1
+	hashTx := pow.block.HashTransactions()
+	fmt.Printf("HashTransactions (full): %x\n", hashTx)
 	return isValid
-
 }

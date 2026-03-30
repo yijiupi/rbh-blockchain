@@ -113,36 +113,43 @@ func bytesToCommand(bytes []byte) string {
 */
 // 开启服务器（节点连接服务器）
 func StartServer(nodeID, minerAddress string) {
-	nodeAddress = fmt.Sprintf("localhost:%s", nodeID) // 服务器节点localshot:3000
+	nodeAddress = fmt.Sprintf("localhost:%s", nodeID) // 当前服务器节点
 	miningAddress = minerAddress                      // 奖励矿工地址
-	ln, err := net.Listen(protocol, nodeAddress)      // 服务端监听传入连接localshot:3000
+
+	// 1. 初始化区块链（若不存在则创建空链）
+	bc, err := initBlockchain(nodeID)
 	if err != nil {
-		//log.Panic(err)
-		log.Fatalf("Listen error: %v", err) // 这种致命错误可以退出
+		log.Fatalf("Failed to initialize blockchain: %v", err)
 	}
-	defer ln.Close()                 // 执行完毕记得关闭监听
-	bc, err := GetBlockchain(nodeID) // 创建当前节点的数据库，得到当前区块hash和db
-	if err != nil {
-		log.Printf("GetBlockchain error: %v", err)
-		return
-	}
-	if nodeAddress != knownNodes[0] { // 检查自己是不是那个种子节点
-		// 并非安全锁，安全读取种子节点
-		knownNodesMutex.RLock()
-		seed := knownNodes[0]
-		knownNodesMutex.RUnlock()
-		sendVersion(seed, bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
-	}
-	// ========== 启动区块下载管理器（并发下载） ==========
-	// 使用 atomic bool 或普通 bool + 互斥锁确保只启动一次
-	if !downloaderStarted {
-		// 启动后台 goroutine，负责管理区块的并发下载、超时重试等
-		go downloadManager(bc)
+	defer func() {
+		if bc.db != nil {
+			bc.db.Close()
+		}
+	}()
+
+	// 2. 启动下载管理器（仅一次，且仅在数据库有效时）// 使用 atomic bool 或普通 bool + 互斥锁确保只启动一次
+	if !downloaderStarted && bc.db != nil {
+		go downloadManager() // 启动后台 goroutine，负责管理区块的并发下载、超时重试等
 		downloaderStarted = true
 		log.Println("Block download manager started")
 	}
-	// =================================================
-	// 服务端等待其它节点来连接
+
+	// 3. 启动网络监听
+	ln, err := net.Listen(protocol, nodeAddress)
+	if err != nil {
+		log.Fatalf("Listen error: %v", err)
+	}
+	defer ln.Close()
+
+	// 4. 如果不是种子节点，主动向种子节点发送版本信息
+	if nodeAddress != knownNodes[0] {
+		knownNodesMutex.RLock()
+		seed := knownNodes[0] // 并发安全锁，安全读取种子节点
+		knownNodesMutex.RUnlock()
+		sendVersion(seed, bc) // 自己不是种子节点，连接已知种子节点同步区块链状态
+	}
+
+	// 5. 接受连接
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
